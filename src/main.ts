@@ -857,9 +857,11 @@ function copyToClipboard(text: string) {
 }
 
 async function scanInto(target: HTMLTextAreaElement) {
-  const Detector = (window as unknown as { BarcodeDetector?: new (opts: { formats: string[] }) => {
-    detect: (source: CanvasImageSource) => Promise<Array<{ rawValue: string }>>;
-  } }).BarcodeDetector;
+  const Detector = (window as unknown as {
+    BarcodeDetector?: new (opts: { formats: string[] }) => {
+      detect: (source: CanvasImageSource) => Promise<Array<{ rawValue: string }>>;
+    }
+  }).BarcodeDetector;
   if (!Detector) {
     appendLog('BarcodeDetector not supported on this device.');
     return;
