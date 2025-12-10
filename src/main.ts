@@ -1,7 +1,12 @@
 import './style.css';
 import { BOARD_SIZE, ScrabbleGame } from './core/game';
 import type { GameState, Language, Placement, Tile } from './core/types';
-import { downloadDictionary, ensureDictionary, hasWord } from './dictionary/dictionaryService';
+import {
+  downloadDictionary,
+  ensureDictionary,
+  hasWord,
+  setMinWordLength
+} from './dictionary/dictionaryService';
 import { createClient, createHost, type P2PConnection } from './network/p2p';
 import { toQrDataUrl } from './network/qr';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
@@ -69,6 +74,11 @@ app.innerHTML = `
               <button id="download-ru" class="ghost">RU pack</button>
             </div>
             <p class="hint">Downloads top-50k frequency lists (MIT) for offline validation; cached on device.</p>
+          </div>
+          <div class="stack">
+            <span class="label">Minimum word length</span>
+            <input id="min-length" type="number" min="1" value="2" />
+            <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
           </div>
         </div>
       </div>
@@ -207,6 +217,7 @@ const startBtn = document.querySelector<HTMLButtonElement>('#start-btn')!;
 const resumeBtn = document.querySelector<HTMLButtonElement>('#resume-btn')!;
 const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snapshot')!;
 const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
+const minLengthInput = document.querySelector<HTMLInputElement>('#min-length')!;
 const modeTabs = document.querySelector<HTMLDivElement>('#mode-tabs')!;
 const meInput = document.querySelector<HTMLInputElement>('#me-name')!;
 const peerInput = document.querySelector<HTMLInputElement>('#peer-name')!;
@@ -311,6 +322,11 @@ function setupEvents() {
   requestSyncBtn.addEventListener('click', () => {
     connection?.send({ type: 'REQUEST_SYNC' });
     appendLog('Requested sync from peer');
+  });
+  minLengthInput.addEventListener('change', () => {
+    const val = Number(minLengthInput.value) || 2;
+    setMinWordLength(val);
+    appendLog(`Min word length set to ${val}`);
   });
 
   boardEl.addEventListener('click', onBoardClick);

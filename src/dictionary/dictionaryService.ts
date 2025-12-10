@@ -25,8 +25,16 @@ const REMOTE_MAP: Record<Language, string> = {
   ru: 'https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt'
 };
 
+// Minimal word length (inclusive); users can adjust via UI.
+const DEFAULT_MIN_LENGTH = 2;
+let minLength = DEFAULT_MIN_LENGTH;
+
 function normalize(word: string) {
   return word.trim().toUpperCase();
+}
+
+export function setMinWordLength(length: number) {
+  minLength = Math.max(1, Math.floor(length));
 }
 
 export async function ensureDictionary(language: Language): Promise<DictionaryStatus> {
@@ -61,7 +69,9 @@ export async function downloadDictionary(language: Language): Promise<Dictionary
 export async function hasWord(word: string, language: Language): Promise<boolean> {
   const status = await ensureDictionary(language);
   if (!status.available || !memoryCache[language]) return false;
-  return memoryCache[language]!.has(normalize(word));
+  const norm = normalize(word);
+  if (norm.length < minLength) return false;
+  return memoryCache[language]!.has(norm);
 }
 
 export function clearMemoryCache() {
@@ -72,9 +82,9 @@ function toSet(data: string) {
   const set = new Set<string>();
   data
     .split('\n')
-    .map(normalize)
+    .map(extractWord)
     .filter(Boolean)
-    .forEach((w) => set.add(w));
+    .forEach((w) => set.add(w as string));
   return set;
 }
 
@@ -90,5 +100,15 @@ async function fetchFirstAvailable(urls: string[]): Promise<string | null> {
     }
   }
   return null;
+}
+
+function extractWord(line: string): string | null {
+  // frequency files look like: "word 12345"
+  const raw = line.trim().split(/\s+/)[0];
+  if (!raw) return null;
+  // keep letters (Latin/Cyrillic); drop punctuation/numbers.
+  const cleaned = raw.replace(/[^A-Za-zА-Яа-яЁё]/g, '');
+  if (!cleaned) return null;
+  return cleaned.toUpperCase();
 }
 
