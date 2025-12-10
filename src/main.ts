@@ -613,8 +613,13 @@ function buildCallbacks() {
     onMessage: (data: unknown) => handleMessage(data),
     onOpen: () => {
       p2pStatus.textContent = 'Connected';
+      appendLog('Data channel open.');
       if (meta?.isHost && currentState) {
+        appendLog('Host: sending sync to peer.');
         sendSync();
+      } else {
+        appendLog('Client: requesting sync from host.');
+        connection?.send({ type: 'REQUEST_SYNC' });
       }
     },
     onClose: () => {
@@ -648,7 +653,7 @@ async function handleMessage(data: unknown) {
     placements = [];
     renderAll();
     await persistSnapshot();
-    appendLog('Synced state from peer');
+    appendLog('Synced state from peer.');
     return;
   }
 
@@ -799,6 +804,7 @@ function sendSync() {
     labels
   };
   connection.send(payload);
+  appendLog('Sync pushed to peer.');
 }
 
 async function ensureLanguage(language: Language) {
