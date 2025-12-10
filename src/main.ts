@@ -68,7 +68,7 @@ app.innerHTML = `
               <button id="download-en" class="ghost">EN pack</button>
               <button id="download-ru" class="ghost">RU pack</button>
             </div>
-            <p class="hint">First download required for offline validation.</p>
+            <p class="hint">Downloads top-50k frequency lists (MIT) for offline validation; cached on device.</p>
           </div>
         </div>
       </div>

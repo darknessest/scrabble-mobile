@@ -18,6 +18,13 @@ const FILE_MAP: Record<Language, string> = {
   ru: `${BASE}dicts/ru-basic.txt`
 };
 
+// Lightweight, permissive frequency lists (top 50k) from hermitdave/FrequencyWords (MIT).
+// These are fetched on-demand and cached locally for offline validation.
+const REMOTE_MAP: Record<Language, string> = {
+  en: 'https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt',
+  ru: 'https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt'
+};
+
 function normalize(word: string) {
   return word.trim().toUpperCase();
 }
@@ -37,12 +44,15 @@ export async function ensureDictionary(language: Language): Promise<DictionarySt
 }
 
 export async function downloadDictionary(language: Language): Promise<DictionaryStatus> {
-  const path = FILE_MAP[language];
-  const response = await fetch(path);
-  if (!response.ok) {
+  // Try remote first (larger, more complete), then fall back to bundled basic list.
+  const remote = REMOTE_MAP[language];
+  const local = FILE_MAP[language];
+
+  const text = await fetchFirstAvailable([remote, local]);
+  if (!text) {
     return { language, available: false };
   }
-  const text = await response.text();
+
   memoryCache[language] = toSet(text);
   await saveDictionary(language, text);
   return { language, available: true, source: 'fetched', words: memoryCache[language]!.size };
@@ -66,5 +76,19 @@ function toSet(data: string) {
     .filter(Boolean)
     .forEach((w) => set.add(w));
   return set;
+}
+
+async function fetchFirstAvailable(urls: string[]): Promise<string | null> {
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (text?.length) return text;
+    } catch {
+      // ignore and try next
+    }
+  }
+  return null;
 }
 
