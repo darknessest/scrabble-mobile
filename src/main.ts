@@ -272,6 +272,7 @@ registerServiceWorker();
 function setupEvents() {
   window.addEventListener('online', renderNetworkStatus);
   window.addEventListener('offline', renderNetworkStatus);
+  appendLog('Tips: both devices on same Wi-Fi, no VPN; host creates offer, client returns answer; host applies answer.');
 
   modeTabs.addEventListener('click', (ev) => {
     const target = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
@@ -574,6 +575,7 @@ async function buildHostOffer() {
   offerText.value = offer;
   offerQr.src = await toQrDataUrl(offer);
   p2pStatus.textContent = 'Offer created - waiting for answer';
+  appendLog('Offer created. Share this code/QR, then paste the answer you get back.');
 }
 
 async function applyHostAnswer() {
@@ -588,6 +590,7 @@ async function applyHostAnswer() {
   }
   await hostApplyAnswer(answer);
   p2pStatus.textContent = 'Connecting...';
+  appendLog('Answer applied. Waiting for data channel to open.');
 }
 
 async function buildClientAnswer() {
@@ -602,6 +605,7 @@ async function buildClientAnswer() {
   clientAnswer.value = answer;
   answerQr.src = await toQrDataUrl(answer);
   p2pStatus.textContent = 'Answer ready - share with host';
+  appendLog('Answer created. Share this code/QR back to the host.');
 }
 
 function buildCallbacks() {
@@ -618,7 +622,8 @@ function buildCallbacks() {
     },
     onError: (err: unknown) => {
       appendLog(`P2P error: ${String(err)}`);
-    }
+    },
+    onLog: (msg: string) => appendLog(msg)
   };
 }
 

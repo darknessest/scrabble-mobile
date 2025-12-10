@@ -1,12 +1,9 @@
-type MessageHandler = (data: unknown) => void;
-type ConnectionHandler = () => void;
-type ErrorHandler = (err: unknown) => void;
-
 export interface P2PCallbacks {
-  onMessage: MessageHandler;
-  onOpen?: ConnectionHandler;
-  onClose?: ConnectionHandler;
-  onError?: ErrorHandler;
+  onMessage: (data: unknown) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+  onError?: (err: unknown) => void;
+  onLog?: (msg: string) => void;
 }
 
 export interface P2PConnection {
@@ -24,6 +21,7 @@ export async function createHost(callbacks: P2PCallbacks) {
   const pc = new RTCPeerConnection(rtcConfig);
   const channel = pc.createDataChannel('scrabble-data', { negotiated: false });
   wireChannel(channel, callbacks);
+  wirePeerLogging(pc, 'host', callbacks);
 
   const offer = await buildOffer(pc);
 
@@ -39,6 +37,7 @@ export async function createHost(callbacks: P2PCallbacks) {
 
 export async function createClient(callbacks: P2PCallbacks, offer: string) {
   const pc = new RTCPeerConnection(rtcConfig);
+  wirePeerLogging(pc, 'client', callbacks);
 
   let channel: RTCDataChannel | null = null;
   pc.ondatachannel = (ev) => {
@@ -127,5 +126,17 @@ function waitForIce(pc: RTCPeerConnection): Promise<void> {
     };
     pc.addEventListener('icegatheringstatechange', check);
   });
+}
+
+function wirePeerLogging(pc: RTCPeerConnection, role: 'host' | 'client', callbacks: P2PCallbacks) {
+  const log = (msg: string) => callbacks.onLog?.(`[${role}] ${msg}`);
+  pc.onicegatheringstatechange = () => log(`iceGatheringState=${pc.iceGatheringState}`);
+  pc.onconnectionstatechange = () => log(`connectionState=${pc.connectionState}`);
+  pc.oniceconnectionstatechange = () => log(`iceConnectionState=${pc.iceConnectionState}`);
+  pc.onicecandidate = (ev) => {
+    if (!ev.candidate) {
+      log('ICE gathering complete');
+    }
+  };
 }
 
