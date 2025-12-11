@@ -54,6 +54,7 @@ app.innerHTML = `
           <span id="p2p-status" class="pill">P2P: idle</span>
         </div>
         <div class="row gap wrap">
+          <button id="force-reload" class="ghost">Force Update</button>
           <button id="toggle-setup" class="ghost">Hide setup</button>
         </div>
       </div>
@@ -288,6 +289,17 @@ function setupEvents() {
   window.addEventListener('online', renderNetworkStatus);
   window.addEventListener('offline', renderNetworkStatus);
   appendLog('Tips: both devices on same Wi-Fi, no VPN; host creates offer, client returns answer; host applies answer.');
+
+  document.querySelector('#force-reload')?.addEventListener('click', async () => {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const registration of registrations) {
+        await registration.unregister();
+      }
+      appendLog('Service workers unregistered');
+    }
+    window.location.reload();
+  });
 
   modeTabs.addEventListener('click', (ev) => {
     const target = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
