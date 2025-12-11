@@ -1,4 +1,5 @@
 import { ScrabbleGame } from './game';
+import { buildBag } from './tiles';
 import type { Placement, Tile } from './types';
 import { ensureDictionary, hasWord } from '../dictionary/dictionaryService';
 
@@ -57,6 +58,8 @@ async function runTests() {
 
   const tests: Array<(dict: (word: string) => Promise<boolean>, isReal: boolean) => Promise<TestResult>> = [
     testRackUpdatesAfterMove,
+    testRackStopsRefillWhenBagEmpty,
+    testBagDistributionMatchesRules,
     testRejectsTilesNotInRack,
     testExchangeKeepsCounts,
     testWordValidation,
@@ -125,6 +128,95 @@ async function testRackUpdatesAfterMove(_dict: (word: string) => Promise<boolean
     details: passed
       ? 'Placed tile leaves the rack, rack refills to 7, board keeps the tile.'
       : 'Rack or bag counts went wrong after placing a tile.'
+  };
+}
+
+async function testRackStopsRefillWhenBagEmpty(
+  _dict: (word: string) => Promise<boolean>,
+  _isReal: boolean
+): Promise<TestResult> {
+  const game = new ScrabbleGame();
+  const state = game.start('en', ['p1', 'p2']);
+  const rack: Tile[] = makeRack(['A', 'B', 'C', 'D', 'E', 'F', 'G']);
+  const bag: Tile[] = makeRack(['H', 'I']); // Only two tiles left to draw
+
+  state.racks.p1 = [...rack];
+  state.racks.p2 = [];
+  state.bag = [...bag];
+
+  const placements: Placement[] = [
+    { x: 7, y: 7, tile: rack[0] },
+    { x: 8, y: 7, tile: rack[1] },
+    { x: 9, y: 7, tile: rack[2] }
+  ];
+
+  const result = await game.placeMove('p1', placements, async () => true);
+  const updated = game.getState();
+
+  const rackIds = new Set(updated.racks.p1.map((t) => t.id));
+  const placedRemoved = placements.every((p) => !rackIds.has(p.tile.id));
+  const drewFromBag = bag.every((tile) => rackIds.has(tile.id));
+  const rackCountCorrect = updated.racks.p1.length === rack.length - placements.length + bag.length;
+  const bagEmpty = updated.bag.length === 0;
+
+  const passed = Boolean(result.success && placedRemoved && drewFromBag && rackCountCorrect && bagEmpty);
+  return {
+    name: 'Rack refills only with available bag tiles',
+    passed,
+    details: passed
+      ? 'Placed tiles leave the rack, only remaining bag tiles are drawn, bag hits zero.'
+      : 'Refill ignored bag limits or failed to draw remaining tiles.'
+  };
+}
+
+async function testBagDistributionMatchesRules(
+  _dict: (word: string) => Promise<boolean>,
+  _isReal: boolean
+): Promise<TestResult> {
+  const bag = buildBag('en');
+  const counts = countLetters(bag);
+
+  const expected: Record<string, number> = {
+    A: 9,
+    B: 2,
+    C: 2,
+    D: 4,
+    E: 12,
+    F: 2,
+    G: 3,
+    H: 2,
+    I: 9,
+    J: 1,
+    K: 1,
+    L: 4,
+    M: 2,
+    N: 6,
+    O: 8,
+    P: 2,
+    Q: 1,
+    R: 6,
+    S: 4,
+    T: 6,
+    U: 4,
+    V: 2,
+    W: 2,
+    X: 1,
+    Y: 2,
+    Z: 1,
+    ' ': 2
+  };
+
+  const totalExpected = Object.values(expected).reduce((sum, n) => sum + n, 0);
+  const matchesSpec = Object.entries(expected).every(([letter, count]) => counts[letter] === count);
+  const noExtraLetters = Object.keys(counts).every((letter) => expected[letter] !== undefined);
+  const passed = matchesSpec && noExtraLetters && bag.length === totalExpected;
+
+  return {
+    name: 'Bag respects English Scrabble letter limits',
+    passed,
+    details: passed
+      ? 'Bag contains 100 tiles with the exact per-letter counts.'
+      : 'Bag counts deviate from official distribution.'
   };
 }
 
@@ -276,6 +368,13 @@ function makeRack(letters: string[]): Tile[] {
     letter,
     value: 1
   }));
+}
+
+function countLetters(tiles: Tile[]): Record<string, number> {
+  return tiles.reduce<Record<string, number>>((acc, tile) => {
+    acc[tile.letter] = (acc[tile.letter] ?? 0) + 1;
+    return acc;
+  }, {});
 }
 
 function appendLog(message: string) {
