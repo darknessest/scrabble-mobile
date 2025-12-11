@@ -109,8 +109,12 @@ export class ScrabbleGame {
     });
 
     // Update rack
-    state.racks[playerId] = removeTiles(state.racks[playerId], placements.map((p) => p.tile.id));
-    state.racks[playerId].push(...drawTiles(state.bag, 7 - state.racks[playerId].length));
+    const { remaining } = removeTiles(state.racks[playerId], placements.map((p) => p.tile.id));
+    state.racks[playerId] = remaining;
+    const tilesNeeded = Math.max(0, 7 - state.racks[playerId].length);
+    if (tilesNeeded > 0) {
+      state.racks[playerId].push(...drawTiles(state.bag, tilesNeeded));
+    }
 
     // Update scores and turn
     state.scores[playerId] += scoreResult.score;
@@ -144,9 +148,14 @@ export class ScrabbleGame {
     if (!playerHasTiles(state.racks[playerId], tileIds)) {
       return { success: false, message: 'Tile not in rack' };
     }
-    const removed = removeTiles(state.racks[playerId], tileIds);
+    const { removed, remaining } = removeTiles(state.racks[playerId], tileIds);
+    state.racks[playerId] = remaining;
     state.bag.push(...removed);
-    state.racks[playerId].push(...drawTiles(state.bag, removed.length));
+    shuffleInPlace(state.bag);
+    const drawCount = Math.min(removed.length, Math.max(0, 7 - state.racks[playerId].length));
+    if (drawCount > 0) {
+      state.racks[playerId].push(...drawTiles(state.bag, drawCount));
+    }
     state.moveNumber += 1;
     state.currentPlayer = nextPlayer(state.players, playerId);
     return { success: true };
@@ -169,20 +178,36 @@ function drawTiles(bag: Tile[], count: number): Tile[] {
 }
 
 function playerHasTiles(rack: Tile[], tileIds: string[]): boolean {
-  const rackIds = rack.map((t) => t.id);
-  return tileIds.every((id) => rackIds.includes(id));
+  const counts: Record<string, number> = {};
+  rack.forEach((t) => {
+    counts[t.id] = (counts[t.id] ?? 0) + 1;
+  });
+  return tileIds.every((id) => {
+    const available = counts[id] ?? 0;
+    if (available <= 0) return false;
+    counts[id] = available - 1;
+    return true;
+  });
 }
 
-function removeTiles(rack: Tile[], tileIds: string[]): Tile[] {
+function removeTiles(rack: Tile[], tileIds: string[]): { removed: Tile[]; remaining: Tile[] } {
+  const remaining = [...rack];
   const removed: Tile[] = [];
   tileIds.forEach((id) => {
-    const idx = rack.findIndex((t) => t.id === id);
+    const idx = remaining.findIndex((t) => t.id === id);
     if (idx >= 0) {
-      removed.push(rack[idx]);
-      rack.splice(idx, 1);
+      removed.push(remaining[idx]);
+      remaining.splice(idx, 1);
     }
   });
-  return removed;
+  return { removed, remaining };
+}
+
+function shuffleInPlace<T>(arr: T[]) {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
 }
 
 function inBounds(v: number) {

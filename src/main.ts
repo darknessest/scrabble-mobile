@@ -426,8 +426,9 @@ function renderTile(tile: Tile, selected = false, pending = false) {
   const classes = ['tile'];
   if (selected) classes.push('selected');
   if (pending) classes.push('pending');
+  if (tile.blank && tile.letter === ' ') classes.push('blank');
   return `<button class="${classes.join(' ')}" data-tile="${tile.id}">
-    <span class="letter">${tile.letter}</span>
+    <span class="letter">${tile.blank && tile.letter === ' ' ? '?' : tile.letter}</span>
     <span class="value">${tile.value}</span>
   </button>`;
 }
@@ -502,6 +503,20 @@ function onBoardClick(ev: MouseEvent) {
   if (selectedTileId) {
     const tile = takeAvailableTile(selectedTileId);
     if (!tile) return;
+
+    // Handle blank tile letter selection
+    if (tile.blank) {
+      selectBlankLetter(tile).then((updatedTile) => {
+        if (updatedTile) {
+          placements.push({ x, y, tile: updatedTile });
+          selectedTileId = null;
+          renderBoard();
+          renderRack();
+        }
+      });
+      return;
+    }
+
     placements.push({ x, y, tile });
     selectedTileId = null;
     renderBoard();
@@ -523,6 +538,104 @@ function takeAvailableTile(tileId: string): Tile | null {
   const rack = currentState.racks[meta.localPlayerId] ?? [];
   const tile = rack.find((t) => t.id === tileId && !used.has(t.id));
   return tile ?? null;
+}
+
+function selectBlankLetter(tile: Tile): Promise<Tile | null> {
+  return new Promise((resolve) => {
+    const language = meta?.language ?? 'en';
+    const letters = language === 'en'
+      ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      : 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ';
+
+    // Create modal dialog
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    `;
+
+    dialog.innerHTML = `
+      <h3 style="margin: 0 0 16px 0; color: #0b1e2d;">Choose blank tile letter</h3>
+      <p style="margin: 0 0 16px 0; color: #6b7280;">Select which letter this blank tile will represent:</p>
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 8px; margin-bottom: 16px;">
+        ${letters.split('').map(letter => `
+          <button class="blank-letter-btn" data-letter="${letter}" style="
+            padding: 8px;
+            border: 2px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            color: #0b1e2d;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            transition: all 0.2s;
+          " onmouseover="this.style.borderColor='#0d6efd'; this.style.background='#f8f9ff'"
+             onmouseout="this.style.borderColor='#d1d5db'; this.style.background='white'">
+            ${letter}
+          </button>
+        `).join('')}
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="cancel-blank" style="
+          padding: 8px 16px;
+          border: 1px solid #d1d5db;
+          border-radius: 6px;
+          background: white;
+          color: #6b7280;
+          cursor: pointer;
+        ">Cancel</button>
+      </div>
+    `;
+
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+
+    // Handle letter selection
+    dialog.addEventListener('click', (ev) => {
+      const target = ev.target as HTMLElement;
+      if (target.classList.contains('blank-letter-btn')) {
+        const letter = target.dataset.letter!;
+        const updatedTile: Tile = {
+          ...tile,
+          letter: letter,
+          value: 0 // blanks are worth 0 points
+        };
+        document.body.removeChild(modal);
+        resolve(updatedTile);
+      } else if (target.id === 'cancel-blank') {
+        document.body.removeChild(modal);
+        resolve(null);
+      }
+    });
+
+    // Handle escape key
+    const handleEscape = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        document.body.removeChild(modal);
+        document.removeEventListener('keydown', handleEscape);
+        resolve(null);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+  });
 }
 
 async function startSession() {
