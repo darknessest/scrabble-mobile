@@ -46,14 +46,19 @@ app.innerHTML = `
         <p class="eyebrow">Mobile-first • Offline • P2P</p>
         <h1>Scrabble PWA</h1>
       </div>
-      <div class="status-row">
-        <span id="offline-status" class="pill">...</span>
-        <span id="dict-status" class="pill">Dictionaries: checking...</span>
-        <span id="p2p-status" class="pill">P2P: idle</span>
+      <div class="stack top-controls">
+        <div class="status-row">
+          <span id="offline-status" class="pill">...</span>
+          <span id="dict-status" class="pill">Dictionaries: checking...</span>
+          <span id="p2p-status" class="pill">P2P: idle</span>
+        </div>
+        <div class="row gap wrap">
+          <button id="toggle-setup" class="ghost">Hide setup</button>
+        </div>
       </div>
     </header>
 
-    <section class="cards">
+    <section class="cards setup-section" id="settings-section">
       <div class="card">
         <div class="card-head">
           <h3>Language & Dictionaries</h3>
@@ -200,7 +205,10 @@ app.innerHTML = `
       <div class="card info-card">
         <div class="card-head">
           <h3>Scores & Status</h3>
-          <button id="request-sync" class="ghost">Request sync</button>
+          <div class="row gap wrap">
+            <button id="toggle-logs" class="ghost">Hide logs</button>
+            <button id="request-sync" class="ghost">Request sync</button>
+          </div>
         </div>
         <div id="scores"></div>
         <div id="log" class="log"></div>
@@ -227,6 +235,7 @@ const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
 const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
+const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
 const confirmMoveBtn = document.querySelector<HTMLButtonElement>('#confirm-move')!;
 const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-placements')!;
 const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
@@ -251,6 +260,8 @@ const refreshDictsBtn = document.querySelector<HTMLButtonElement>('#refresh-dict
 const downloadEnBtn = document.querySelector<HTMLButtonElement>('#download-en')!;
 const downloadRuBtn = document.querySelector<HTMLButtonElement>('#download-ru')!;
 const requestSyncBtn = document.querySelector<HTMLButtonElement>('#request-sync')!;
+const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup')!;
+const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
 
 let mode: Mode = 'solo';
 let meta: SessionMeta | null = null;
@@ -261,10 +272,13 @@ let selectedTileId: string | null = null;
 let connection: P2PConnection | null = null;
 let hostApplyAnswer: ((answer: string) => Promise<void>) | null = null;
 let pendingSnapshot: SnapshotPayload | null = null;
+let settingsHidden = false;
+let logsHidden = false;
 
 setupEvents();
 renderNetworkStatus();
 renderHandshakeVisibility();
+renderVisibility();
 refreshDictStatus();
 checkSavedSnapshot();
 registerServiceWorker();
@@ -324,6 +338,14 @@ function setupEvents() {
     connection?.send({ type: 'REQUEST_SYNC' });
     appendLog('Requested sync from peer');
   });
+  toggleSetupBtn.addEventListener('click', () => {
+    settingsHidden = !settingsHidden;
+    renderVisibility();
+  });
+  toggleLogsBtn.addEventListener('click', () => {
+    logsHidden = !logsHidden;
+    renderVisibility();
+  });
   minLengthInput.addEventListener('change', () => {
     const val = Number(minLengthInput.value) || 2;
     setMinWordLength(val);
@@ -345,6 +367,15 @@ function renderHandshakeVisibility() {
   const clientCard = document.querySelector<HTMLDivElement>('#client-handshake')!;
   hostCard.style.display = mode === 'host' ? 'block' : 'none';
   clientCard.style.display = mode === 'client' ? 'block' : 'none';
+}
+
+function renderVisibility() {
+  settingsSection.style.display = settingsHidden ? 'none' : '';
+  logEl.style.display = logsHidden ? 'none' : '';
+  toggleSetupBtn.textContent = settingsHidden ? 'Show setup' : 'Hide setup';
+  toggleSetupBtn.setAttribute('aria-pressed', settingsHidden ? 'true' : 'false');
+  toggleLogsBtn.textContent = logsHidden ? 'Show logs' : 'Hide logs';
+  toggleLogsBtn.setAttribute('aria-pressed', logsHidden ? 'true' : 'false');
 }
 
 function renderBoard() {

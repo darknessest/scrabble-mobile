@@ -40,6 +40,11 @@ body {
   gap: 1rem;
 }
 
+.top-controls {
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
 h1 {
   margin: 0.2rem 0 0;
   font-size: 2rem;
