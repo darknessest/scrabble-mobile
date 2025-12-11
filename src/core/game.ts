@@ -72,7 +72,7 @@ export class ScrabbleGame {
     if (!placements.every((p) => state.board[p.y][p.x].tile === null)) {
       return { success: false, message: 'Cell already occupied' };
     }
-    const orientation = inferOrientation(placements);
+    const orientation = inferOrientation(state.board, placements);
     if (!orientation) {
       return { success: false, message: 'Tiles must align in a row or column' };
     }
@@ -216,7 +216,23 @@ function inBounds(v: number) {
 
 type Orientation = 'row' | 'col';
 
-function inferOrientation(placements: Placement[]): Orientation | null {
+function inferOrientation(board: BoardCell[][], placements: Placement[]): Orientation | null {
+  if (placements.length === 1) {
+    const [placement] = placements;
+    const { x, y } = placement;
+    const left = inBounds(x - 1) && board[y][x - 1].tile;
+    const right = inBounds(x + 1) && board[y][x + 1].tile;
+    const up = inBounds(y - 1) && board[y - 1][x].tile;
+    const down = inBounds(y + 1) && board[y + 1][x].tile;
+    const horizontalNeighbor = Boolean(left || right);
+    const verticalNeighbor = Boolean(up || down);
+
+    if (horizontalNeighbor && !verticalNeighbor) return 'row';
+    if (verticalNeighbor && !horizontalNeighbor) return 'col';
+    if (horizontalNeighbor && verticalNeighbor) return 'row';
+    return 'row';
+  }
+
   const sameRow = placements.every((p) => p.y === placements[0].y);
   const sameCol = placements.every((p) => p.x === placements[0].x);
   if (sameRow) return 'row';

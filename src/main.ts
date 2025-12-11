@@ -12,6 +12,8 @@ import { toQrDataUrl } from './network/qr';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
 import jsQR from 'jsqr';
 
+declare const __APP_VERSION__: string;
+
 type Mode = 'solo' | 'host' | 'client';
 
 interface SessionMeta {
@@ -21,6 +23,9 @@ interface SessionMeta {
   localPlayerId: string;
   remotePlayerId?: string;
   sessionId: string;
+  timerEnabled?: boolean;
+  timerDurationSec?: number;
+  turnDeadline?: number | null;
 }
 
 interface SnapshotPayload {
@@ -46,6 +51,7 @@ app.innerHTML = `
       <div class="brand">
         <p class="eyebrow">Mobile-first • Offline • P2P</p>
         <h1>Scrabble PWA</h1>
+        <p id="app-version" class="hint version"></p>
       </div>
       <div class="stack top-controls">
         <div class="status-row">
@@ -63,17 +69,10 @@ app.innerHTML = `
     <section class="cards setup-section" id="settings-section">
       <div class="card">
         <div class="card-head">
-          <h3>Language & Dictionaries</h3>
+          <h3>Dictionaries & Validation</h3>
           <button class="ghost" id="refresh-dicts">Re-check</button>
         </div>
-        <div class="row gap">
-          <label class="stack">
-            <span class="label">Language</span>
-            <select id="language">
-              <option value="en">English</option>
-              <option value="ru">Русский</option>
-            </select>
-          </label>
+        <div class="row gap wrap">
           <div class="stack">
             <span class="label">Download packs</span>
             <div class="row gap">
@@ -108,6 +107,18 @@ app.innerHTML = `
           <label class="stack flex1">
             <span class="label">Partner name</span>
             <input id="peer-name" value="Player 2" />
+          </label>
+          <label class="stack" id="session-language">
+            <span class="label">Session language (solo/host)</span>
+            <select id="language">
+              <option value="en">English</option>
+              <option value="ru">Русский</option>
+            </select>
+          </label>
+          <label class="stack" id="session-timer">
+            <span class="label">Turn timer (minutes)</span>
+            <input id="turn-timer" type="number" min="1" max="10" value="5" />
+            <p class="hint">Applies to solo/host; shared with peers.</p>
           </label>
         </div>
         <div class="row gap">
@@ -185,6 +196,7 @@ app.innerHTML = `
           <div class="row gap">
             <span class="label">Turn:</span>
             <span id="turn-indicator" class="pill"></span>
+            <span id="timer-display" class="pill timer-pill"></span>
           </div>
         </div>
         <div id="board" class="board"></div>
@@ -223,11 +235,13 @@ const languageSelect = document.querySelector<HTMLSelectElement>('#language')!;
 const offlineStatus = document.querySelector<HTMLSpanElement>('#offline-status')!;
 const dictStatus = document.querySelector<HTMLSpanElement>('#dict-status')!;
 const p2pStatus = document.querySelector<HTMLSpanElement>('#p2p-status')!;
+const versionEl = document.querySelector<HTMLParagraphElement>('#app-version');
 const startBtn = document.querySelector<HTMLButtonElement>('#start-btn')!;
 const resumeBtn = document.querySelector<HTMLButtonElement>('#resume-btn')!;
 const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snapshot')!;
 const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
 const minLengthInput = document.querySelector<HTMLInputElement>('#min-length')!;
+const timerInput = document.querySelector<HTMLInputElement>('#turn-timer')!;
 const modeTabs = document.querySelector<HTMLDivElement>('#mode-tabs')!;
 const meInput = document.querySelector<HTMLInputElement>('#me-name')!;
 const peerInput = document.querySelector<HTMLInputElement>('#peer-name')!;
@@ -235,6 +249,7 @@ const boardEl = document.querySelector<HTMLDivElement>('#board')!;
 const rackEl = document.querySelector<HTMLDivElement>('#rack')!;
 const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
 const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
+const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
 const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
@@ -264,6 +279,8 @@ const downloadRuBtn = document.querySelector<HTMLButtonElement>('#download-ru')!
 const requestSyncBtn = document.querySelector<HTMLButtonElement>('#request-sync')!;
 const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup')!;
 const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
+const languageWrapper = document.querySelector<HTMLElement>('#session-language')!;
+const timerWrapper = document.querySelector<HTMLElement>('#session-timer')!;
 
 let mode: Mode = 'solo';
 let meta: SessionMeta | null = null;
@@ -276,10 +293,15 @@ let hostApplyAnswer: ((answer: string) => Promise<void>) | null = null;
 let pendingSnapshot: SnapshotPayload | null = null;
 let settingsHidden = false;
 let logsHidden = false;
+let timerTicker: number | null = null;
+let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
+let validationMessage = '';
+let validationNonce = 0;
 
 setupEvents();
 renderNetworkStatus();
-renderHandshakeVisibility();
+renderVersion();
+applyModeUI();
 renderVisibility();
 refreshDictStatus();
 checkSavedSnapshot();
@@ -304,10 +326,8 @@ function setupEvents() {
   modeTabs.addEventListener('click', (ev) => {
     const target = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
     if (!target) return;
-    modeTabs.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
-    target.classList.add('active');
     mode = target.dataset.mode as Mode;
-    renderHandshakeVisibility();
+    applyModeUI();
   });
 
   languageSelect.addEventListener('change', () => {
@@ -332,6 +352,7 @@ function setupEvents() {
     selectedTileId = null;
     renderBoard();
     renderRack();
+    updateValidation();
   });
   passBtn.addEventListener('click', () => submitPass());
   exchangeBtn.addEventListener('click', () => submitExchange());
@@ -341,8 +362,16 @@ function setupEvents() {
   applyAnswerBtn.addEventListener('click', () => applyHostAnswer());
   buildAnswerBtn.addEventListener('click', () => buildClientAnswer());
   copyClientAnswerBtn.addEventListener('click', () => copyToClipboard(clientAnswer.value));
-  scanOfferBtn.addEventListener('click', () => scanInto(hostOfferInput));
-  scanAnswerBtn.addEventListener('click', () => scanInto(answerText));
+  scanOfferBtn.addEventListener('click', () =>
+    scanInto(hostOfferInput, async () => {
+      await buildClientAnswer();
+    })
+  );
+  scanAnswerBtn.addEventListener('click', () =>
+    scanInto(answerText, async () => {
+      await applyHostAnswer();
+    })
+  );
 
   refreshDictsBtn.addEventListener('click', () => refreshDictStatus());
   downloadEnBtn.addEventListener('click', () => downloadLanguage('en'));
@@ -375,11 +404,136 @@ function renderNetworkStatus() {
   offlineStatus.classList.toggle('danger', !online);
 }
 
+function renderVersion() {
+  if (!versionEl) return;
+  const version = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
+  versionEl.textContent = `Version ${version}`;
+}
+
+function applyTimerInputFromMeta() {
+  if (meta?.timerDurationSec) {
+    const minutes = Math.max(1, Math.round(meta.timerDurationSec / 60));
+    timerInput.value = String(minutes);
+  }
+}
+
+function resolveTimerDurationSeconds() {
+  const minutes = Number(timerInput.value) || 0;
+  if (Number.isNaN(minutes) || minutes <= 0) return 0;
+  return Math.min(Math.max(minutes, 1), 10) * 60;
+}
+
+function startTimerTicker() {
+  stopTimerTicker();
+  renderTimer();
+  timerTicker = window.setInterval(renderTimer, 500);
+}
+
+function stopTimerTicker() {
+  if (timerTicker) {
+    window.clearInterval(timerTicker);
+    timerTicker = null;
+  }
+}
+
+function renderTimer() {
+  if (!timerDisplay) return;
+  if (!meta || !meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) {
+    timerDisplay.style.display = 'none';
+    return;
+  }
+
+  const remainingMs = meta.turnDeadline - Date.now();
+  const clamped = Math.max(0, remainingMs);
+  const totalSeconds = Math.floor(clamped / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  timerDisplay.style.display = '';
+  timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  timerDisplay.classList.toggle('danger', clamped === 0);
+  timerDisplay.classList.toggle('active', clamped > 0);
+}
+
+function resetTurnTimer() {
+  if (!meta) {
+    stopTimerTicker();
+    renderTimer();
+    return;
+  }
+
+  if (!meta.timerEnabled || !meta.timerDurationSec) {
+    meta.turnDeadline = null;
+    stopTimerTicker();
+    renderTimer();
+    return;
+  }
+
+  meta.turnDeadline = Date.now() + meta.timerDurationSec * 1000;
+  startTimerTicker();
+}
+
+async function updateValidation() {
+  validationNonce += 1;
+  const ticket = validationNonce;
+
+  if (!currentState || !meta || placements.length === 0) {
+    validationStatus = 'idle';
+    validationMessage = '';
+    renderBoard();
+    return;
+  }
+
+  validationStatus = 'checking';
+  validationMessage = '';
+  renderBoard();
+
+  const preview = new ScrabbleGame();
+  preview.resume(structuredClone(currentState));
+  const result = await preview.placeMove(
+    meta.localPlayerId,
+    placements,
+    (word, lang) => hasWord(word, lang)
+  );
+
+  if (ticket !== validationNonce) return;
+
+  if (result.success) {
+    validationStatus = 'valid';
+    validationMessage = '';
+  } else {
+    validationStatus = 'invalid';
+    validationMessage = result.message ?? 'Invalid move';
+  }
+  renderBoard();
+}
+
 function renderHandshakeVisibility() {
   const hostCard = document.querySelector<HTMLDivElement>('#host-handshake')!;
   const clientCard = document.querySelector<HTMLDivElement>('#client-handshake')!;
   hostCard.style.display = mode === 'host' ? 'block' : 'none';
   clientCard.style.display = mode === 'client' ? 'block' : 'none';
+}
+
+function applyModeUI() {
+  modeTabs.querySelectorAll('button').forEach((b) => {
+    const isActive = b.dataset.mode === mode;
+    b.classList.toggle('active', isActive);
+  });
+  renderHandshakeVisibility();
+  renderModeControls();
+}
+
+function renderModeControls() {
+  const isJoin = mode === 'client';
+  languageSelect.disabled = isJoin;
+  if (languageWrapper) {
+    languageWrapper.style.display = isJoin ? 'none' : '';
+  }
+  timerInput.disabled = isJoin;
+  if (timerWrapper) {
+    timerWrapper.style.display = isJoin ? 'none' : '';
+  }
 }
 
 function renderVisibility() {
@@ -407,7 +561,15 @@ function renderBoard() {
       const tile = placed?.tile ?? state.board[y][x].tile;
       const premium = premiumClass(x, y);
       const isNew = placementKeys.has(`${x},${y}`);
-      const classes = ['cell', premium, isNew ? 'pending' : ''].filter(Boolean).join(' ');
+      const validationClass =
+        isNew && validationStatus === 'valid'
+          ? 'valid'
+          : isNew && validationStatus === 'invalid'
+            ? 'invalid'
+            : isNew && validationStatus === 'checking'
+              ? 'checking'
+              : '';
+      const classes = ['cell', premium, isNew ? 'pending' : '', validationClass].filter(Boolean).join(' ');
       cells.push(
         `<div class="${classes}" data-x="${x}" data-y="${y}">
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
@@ -464,6 +626,7 @@ function renderAll() {
   renderBoard();
   renderRack();
   renderScores();
+  renderTimer();
 }
 
 function renderTile(tile: Tile, selected = false, pending = false) {
@@ -556,6 +719,7 @@ function onBoardClick(ev: MouseEvent) {
           selectedTileId = null;
           renderBoard();
           renderRack();
+          updateValidation();
         }
       });
       return;
@@ -565,6 +729,7 @@ function onBoardClick(ev: MouseEvent) {
     selectedTileId = null;
     renderBoard();
     renderRack();
+    updateValidation();
   } else {
     // Remove pending tile if tapped
     const idx = placements.findIndex((p) => p.x === x && p.y === y);
@@ -572,6 +737,7 @@ function onBoardClick(ev: MouseEvent) {
       placements.splice(idx, 1);
       renderBoard();
       renderRack();
+      updateValidation();
     }
   }
 }
@@ -694,10 +860,13 @@ async function startSession() {
   }
 
   const language = languageSelect.value as Language;
+  languageSelect.value = language;
   const me = meInput.value || 'Player 1';
   const peer = peerInput.value || 'Player 2';
   const localId = mode === 'solo' ? 'p1' : 'host';
   const remoteId = mode === 'solo' ? 'p2' : 'client';
+  const timerDurationSec = resolveTimerDurationSeconds();
+  const timerEnabled = timerDurationSec > 0;
 
   await ensureLanguage(language);
 
@@ -708,12 +877,17 @@ async function startSession() {
     isHost: mode === 'host' || mode === 'solo',
     localPlayerId: localId,
     remotePlayerId: remoteId,
-    sessionId: state.sessionId
+    sessionId: state.sessionId,
+    timerEnabled,
+    timerDurationSec: timerEnabled ? timerDurationSec : undefined,
+    turnDeadline: timerEnabled ? Date.now() + timerDurationSec * 1000 : null
   };
   labels = { [localId]: me, [remoteId]: peer };
   currentState = state;
   placements = [];
+  resetTurnTimer();
   renderAll();
+  updateValidation();
   appendLog(`Started ${mode} game as ${me}`);
 
   await persistSnapshot();
@@ -813,6 +987,16 @@ async function handleMessage(data: unknown) {
     game.resume(msg.state);
     currentState = game.getState();
     placements = [];
+    languageSelect.value = meta.language;
+    mode = meta.mode;
+    applyModeUI();
+    applyTimerInputFromMeta();
+    if (meta.timerEnabled && meta.turnDeadline) {
+      startTimerTicker();
+    } else {
+      stopTimerTicker();
+    }
+    updateValidation();
     renderAll();
     await persistSnapshot();
     appendLog('Synced state from peer.');
@@ -839,6 +1023,7 @@ async function handleMessage(data: unknown) {
     );
     if (result.success) {
       currentState = game.getState();
+      resetTurnTimer();
       await persistSnapshot();
       sendSync();
       renderAll();
@@ -849,6 +1034,7 @@ async function handleMessage(data: unknown) {
     const result = game.passTurn(msg.playerId);
     if (result.success) {
       currentState = game.getState();
+      resetTurnTimer();
       await persistSnapshot();
       sendSync();
       renderAll();
@@ -857,6 +1043,7 @@ async function handleMessage(data: unknown) {
     const result = game.exchangeTiles(msg.playerId, msg.tileIds);
     if (result.success) {
       currentState = game.getState();
+      resetTurnTimer();
       await persistSnapshot();
       sendSync();
       renderAll();
@@ -885,7 +1072,9 @@ async function submitMove() {
       return;
     }
     currentState = game.getState();
+    resetTurnTimer();
     placements = [];
+    updateValidation();
     renderAll();
     await persistSnapshot();
     sendSync();
@@ -898,6 +1087,7 @@ async function submitMove() {
     placements = [];
     renderBoard();
     renderRack();
+    updateValidation();
     appendLog('Move sent to host');
   }
 }
@@ -911,6 +1101,7 @@ async function submitPass() {
       return;
     }
     currentState = game.getState();
+    resetTurnTimer();
     await persistSnapshot();
     renderAll();
     sendSync();
@@ -936,6 +1127,7 @@ async function submitExchange() {
   selectedTileId = null;
   renderBoard();
   renderRack();
+  updateValidation();
 
   if (meta.isHost || meta.mode === 'solo') {
     const result = game.exchangeTiles(meta.localPlayerId, tileIds);
@@ -944,6 +1136,7 @@ async function submitExchange() {
       return;
     }
     currentState = game.getState();
+    resetTurnTimer();
     await persistSnapshot();
     renderAll();
     sendSync();
@@ -1026,9 +1219,19 @@ async function resumeSnapshot() {
   await ensureLanguage(pendingSnapshot.meta.language);
   meta = pendingSnapshot.meta;
   labels = pendingSnapshot.labels;
+  languageSelect.value = pendingSnapshot.meta.language;
+  mode = pendingSnapshot.meta.mode;
+  applyModeUI();
+  applyTimerInputFromMeta();
+  if (meta.timerEnabled && meta.turnDeadline) {
+    startTimerTicker();
+  } else {
+    stopTimerTicker();
+  }
   game.resume(pendingSnapshot.state);
   currentState = game.getState();
   placements = [];
+  updateValidation();
   renderAll();
   appendLog('Resumed saved game.');
 }
@@ -1045,7 +1248,7 @@ function copyToClipboard(text: string) {
   navigator.clipboard?.writeText(text).then(() => appendLog('Copied to clipboard'));
 }
 
-async function scanInto(target: HTMLTextAreaElement) {
+async function scanInto(target: HTMLTextAreaElement, onScanned?: (data: string) => void | Promise<void>) {
   // Create modal UI
   const modal = document.createElement('div');
   modal.style.cssText = `
@@ -1143,6 +1346,13 @@ async function scanInto(target: HTMLTextAreaElement) {
         if (code && code.data) {
           target.value = code.data;
           appendLog('QR scanned successfully');
+          if (onScanned) {
+            try {
+              await onScanned(code.data);
+            } catch (err) {
+              appendLog(`Auto-connect error: ${String(err)}`);
+            }
+          }
           stop();
           return;
         }
