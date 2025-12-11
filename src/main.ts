@@ -295,7 +295,6 @@ let settingsHidden = false;
 let logsHidden = false;
 let timerTicker: number | null = null;
 let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
-let validationMessage = '';
 let validationNonce = 0;
 
 setupEvents();
@@ -479,13 +478,11 @@ async function updateValidation() {
 
   if (!currentState || !meta || placements.length === 0) {
     validationStatus = 'idle';
-    validationMessage = '';
     renderBoard();
     return;
   }
 
   validationStatus = 'checking';
-  validationMessage = '';
   renderBoard();
 
   const preview = new ScrabbleGame();
@@ -498,13 +495,7 @@ async function updateValidation() {
 
   if (ticket !== validationNonce) return;
 
-  if (result.success) {
-    validationStatus = 'valid';
-    validationMessage = '';
-  } else {
-    validationStatus = 'invalid';
-    validationMessage = result.message ?? 'Invalid move';
-  }
+  validationStatus = result.success ? 'valid' : 'invalid';
   renderBoard();
 }
 
@@ -1347,11 +1338,9 @@ async function scanInto(target: HTMLTextAreaElement, onScanned?: (data: string) 
           target.value = code.data;
           appendLog('QR scanned successfully');
           if (onScanned) {
-            try {
-              await onScanned(code.data);
-            } catch (err) {
-              appendLog(`Auto-connect error: ${String(err)}`);
-            }
+            Promise.resolve(onScanned(code.data)).catch((err) =>
+              appendLog(`Auto-connect error: ${String(err)}`)
+            );
           }
           stop();
           return;
