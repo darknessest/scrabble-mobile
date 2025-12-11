@@ -10,6 +10,7 @@ import {
 import { createClient, createHost, type P2PConnection } from './network/p2p';
 import { toQrDataUrl } from './network/qr';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
+import jsQR from 'jsqr';
 
 type Mode = 'solo' | 'host' | 'client';
 
@@ -1033,46 +1034,115 @@ function copyToClipboard(text: string) {
 }
 
 async function scanInto(target: HTMLTextAreaElement) {
-  const Detector = (window as unknown as {
-    BarcodeDetector?: new (opts: { formats: string[] }) => {
-      detect: (source: CanvasImageSource) => Promise<Array<{ rawValue: string }>>;
-    }
-  }).BarcodeDetector;
-  if (!Detector) {
-    appendLog('BarcodeDetector not supported on this device.');
-    return;
-  }
-  const detector = new Detector({ formats: ['qr_code'] });
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  // Create modal UI
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: #000; display: flex; flex-direction: column; z-index: 2000;
+  `;
+
+  const videoContainer = document.createElement('div');
+  videoContainer.style.cssText = `position: relative; width: 100%; flex: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000;`;
+
   const video = document.createElement('video');
-  video.srcObject = stream;
-  await video.play();
+  video.style.cssText = `width: 100%; height: 100%; object-fit: cover;`;
+  video.setAttribute('playsinline', 'true'); // Required for iOS
+  videoContainer.appendChild(video);
 
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  // Add a scan reticle/overlay
+  const reticle = document.createElement('div');
+  reticle.style.cssText = `
+    position: absolute; width: 250px; height: 250px;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+    border-radius: 16px;
+    pointer-events: none;
+  `;
+  videoContainer.appendChild(reticle);
 
-  return new Promise<void>((resolve) => {
-    const tick = async () => {
-      if (video.readyState !== video.HAVE_ENOUGH_DATA) {
-        requestAnimationFrame(tick);
-        return;
+  const controls = document.createElement('div');
+  controls.style.cssText = `
+    width: 100%; background: #000;
+    display: flex; justify-content: center; padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom));
+  `;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Cancel Scan';
+  closeBtn.className = 'primary danger';
+  closeBtn.style.minWidth = '120px';
+  closeBtn.onclick = () => stop();
+  controls.appendChild(closeBtn);
+
+  modal.appendChild(videoContainer);
+  modal.appendChild(controls);
+  document.body.appendChild(modal);
+
+  let stream: MediaStream | null = null;
+  let animationFrameId: number | null = null;
+  let isActive = true;
+
+  const stop = () => {
+    isActive = false;
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+    }
+    if (document.body.contains(modal)) {
+      document.body.removeChild(modal);
+    }
+  };
+
+  try {
+    // Request camera
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    if (!isActive) {
+      // User cancelled while waiting for permission
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    video.srcObject = stream;
+    await video.play();
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    if (!ctx) {
+      appendLog('Canvas context not supported');
+      stop();
+      return;
+    }
+
+    const tick = () => {
+      if (!isActive) return;
+
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "dontInvert",
+        });
+
+        if (code && code.data) {
+          target.value = code.data;
+          appendLog('QR scanned successfully');
+          stop();
+          return;
+        }
       }
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const codes = await detector.detect(canvas);
-      if (codes.length > 0) {
-        target.value = codes[0].rawValue;
-        stream.getTracks().forEach((t) => t.stop());
-        appendLog('QR scanned');
-        resolve();
-        return;
-      }
-      requestAnimationFrame(tick);
+      animationFrameId = requestAnimationFrame(tick);
     };
+
     tick();
-  });
+  } catch (err) {
+    appendLog(`Camera error: ${err}`);
+    stop();
+  }
 }
 
 function registerServiceWorker() {
