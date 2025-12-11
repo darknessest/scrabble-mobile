@@ -129,7 +129,7 @@ app.innerHTML = `
           <div class="stack flex1">
             <span class="label">Offer (share with partner)</span>
             <textarea id="offer-text" rows="3" readonly></textarea>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button id="build-offer" class="primary">Create offer</button>
               <button id="copy-offer" class="ghost">Copy</button>
             </div>
@@ -137,7 +137,7 @@ app.innerHTML = `
           <div class="stack flex1">
             <span class="label">Answer from partner</span>
             <textarea id="answer-text" rows="3" placeholder="Scan/paste answer"></textarea>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button id="apply-answer" class="primary">Apply answer</button>
               <button id="scan-answer" class="ghost">Scan QR</button>
             </div>
@@ -158,7 +158,7 @@ app.innerHTML = `
           <div class="stack flex1">
             <span class="label">Host offer</span>
             <textarea id="host-offer-input" rows="3" placeholder="Scan/paste host offer"></textarea>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button id="scan-offer" class="ghost">Scan QR</button>
               <button id="build-answer" class="primary">Build answer</button>
             </div>
@@ -166,7 +166,7 @@ app.innerHTML = `
           <div class="stack flex1">
             <span class="label">Your answer (share back)</span>
             <textarea id="client-answer" rows="3" readonly></textarea>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button id="copy-client-answer" class="ghost">Copy</button>
             </div>
           </div>
