@@ -42,13 +42,13 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div class="shell">
     <header class="top">
-      <div>
+      <div class="brand">
         <p class="eyebrow">Mobile-first • Offline • P2P</p>
         <h1>Scrabble PWA</h1>
       </div>
       <div class="stack top-controls">
         <div class="status-row">
-          <span id="offline-status" class="pill">...</span>
+          <span id="offline-status" class="pill"><span class="status-dot"></span>...</span>
           <span id="dict-status" class="pill">Dictionaries: checking...</span>
           <span id="p2p-status" class="pill">P2P: idle</span>
         </div>
@@ -595,44 +595,49 @@ function selectBlankLetter(tile: Tile): Promise<Tile | null> {
 
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-      background: white;
-      border-radius: 12px;
-      padding: 20px;
-      max-width: 400px;
+      background: #1e293b;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 420px;
       width: 90%;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
     `;
 
     dialog.innerHTML = `
-      <h3 style="margin: 0 0 16px 0; color: #0b1e2d;">Choose blank tile letter</h3>
-      <p style="margin: 0 0 16px 0; color: #6b7280;">Select which letter this blank tile will represent:</p>
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 8px; margin-bottom: 16px;">
+      <h3 style="margin: 0 0 12px 0; color: #f1f5f9; font-size: 1.25rem; font-weight: 600;">Choose blank tile letter</h3>
+      <p style="margin: 0 0 20px 0; color: #94a3b8; font-size: 0.9rem;">Select which letter this blank tile will represent:</p>
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 8px; margin-bottom: 20px;">
         ${letters.split('').map(letter => `
           <button class="blank-letter-btn" data-letter="${letter}" style="
-            padding: 8px;
-            border: 2px solid #d1d5db;
-            border-radius: 6px;
-            background: white;
-            color: #0b1e2d;
+            padding: 10px 8px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            background: linear-gradient(145deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
+            color: #1c1917;
             cursor: pointer;
-            font-weight: bold;
+            font-weight: 700;
             font-size: 16px;
-            transition: all 0.2s;
-          " onmouseover="this.style.borderColor='#0d6efd'; this.style.background='#f8f9ff'"
-             onmouseout="this.style.borderColor='#d1d5db'; this.style.background='white'">
+            transition: all 0.15s;
+            box-shadow: inset 0 -2px 0 #b45309, 0 2px 4px rgba(0,0,0,0.2);
+          " onmouseover="this.style.transform='translateY(-2px) scale(1.05)'; this.style.boxShadow='0 0 0 2px #3b82f6, inset 0 -2px 0 #b45309, 0 4px 8px rgba(0,0,0,0.3)'"
+             onmouseout="this.style.transform=''; this.style.boxShadow='inset 0 -2px 0 #b45309, 0 2px 4px rgba(0,0,0,0.2)'">
             ${letter}
           </button>
         `).join('')}
       </div>
-      <div style="display: flex; gap: 8px; justify-content: flex-end;">
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
         <button id="cancel-blank" style="
-          padding: 8px 16px;
-          border: 1px solid #d1d5db;
-          border-radius: 6px;
-          background: white;
-          color: #6b7280;
+          padding: 10px 20px;
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          border-radius: 10px;
+          background: #334155;
+          color: #f1f5f9;
           cursor: pointer;
-        ">Cancel</button>
+          font-weight: 600;
+          font-size: 0.9rem;
+          transition: all 0.15s;
+        " onmouseover="this.style.background='#475569'" onmouseout="this.style.background='#334155'">Cancel</button>
       </div>
     `;
 
