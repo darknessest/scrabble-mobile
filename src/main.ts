@@ -179,7 +179,7 @@ app.innerHTML = `
     </section>
 
     <section class="cards">
-      <div class="card board-card">
+      <div class="card board-card board-bleed">
         <div class="card-head">
           <h3>Board</h3>
           <div class="row gap">
