@@ -45,7 +45,7 @@ class MockRTCDataChannel extends MockEventTarget {
     this.label = label;
   }
 
-  send(data: any) {
+  send(_data: any) {
     // No-op for mock, unless we want to simulate loopback
   }
 
@@ -76,11 +76,11 @@ class MockRTCPeerConnection extends MockEventTarget {
 
   createdChannels: MockRTCDataChannel[] = [];
 
-  constructor(config: any) {
+  constructor(_config: any) {
     super();
   }
 
-  createDataChannel(label: string, options?: any) {
+  createDataChannel(label: string, _options?: any) {
     const channel = new MockRTCDataChannel(label);
     this.createdChannels.push(channel);
     return channel;
@@ -218,7 +218,7 @@ describe('P2P Network', () => {
       onLog: vi.fn()
     };
 
-    const host = await createHost(callbacks);
+    const _host = await createHost(callbacks);
     const pc = createdPCs[0];
 
     // Simulate connection state change to 'failed'
