@@ -63,7 +63,8 @@ async function runTests() {
     testRejectsTilesNotInRack,
     testExchangeKeepsCounts,
     testWordValidation,
-    testBlankTileHandling
+    testBlankTileHandling,
+    testSoloModePlayerRotation
   ];
 
   appendLog('Running core checks...');
@@ -359,6 +360,43 @@ async function testBlankTileHandling(_dict: (word: string) => Promise<boolean>, 
     details: passed
       ? 'Blank tile assignment and placement works correctly.'
       : 'Blank tile handling failed.'
+  };
+}
+
+async function testSoloModePlayerRotation(_dict: (word: string) => Promise<boolean>, _isReal: boolean): Promise<TestResult> {
+  const game = new ScrabbleGame();
+  const state = game.start('en', ['p1']);
+
+  const rack = state.racks.p1;
+  if (!rack || rack.length < 2) {
+    return { name: 'Solo Mode Rotation', passed: false, details: 'Rack initialization failed' };
+  }
+
+  // Force first move with fake tiles to ensure we have enough
+  // We can't easily rely on random rack having vowels/consonants for a real word, but we mock the dictionary.
+  // We do need to ensure the rack has tiles.
+
+  // Let's just use the first two tiles from the rack.
+  const t1 = rack[0];
+  const t2 = rack[1];
+
+  const placements: Placement[] = [
+    { x: 7, y: 7, tile: t1 },
+    { x: 8, y: 7, tile: t2 }
+  ];
+
+  // Fake word check
+  const result = await game.placeMove('p1', placements, async () => true);
+
+  const updated = game.getState();
+  const currentPlayer = updated.currentPlayer;
+
+  const passed = result.success && currentPlayer === 'p1';
+
+  return {
+    name: 'Solo mode rotates back to single player',
+    passed,
+    details: passed ? 'Player remains p1 after move' : `Current player became ${currentPlayer}`
   };
 }
 

@@ -517,6 +517,12 @@ function applyModeUI() {
 
 function renderModeControls() {
   const isJoin = mode === 'client';
+  const isSolo = mode === 'solo';
+  const peerWrapper = peerInput.closest('.stack') as HTMLElement;
+  if (peerWrapper) {
+    peerWrapper.style.display = isSolo ? 'none' : '';
+  }
+
   languageSelect.disabled = isJoin;
   if (languageWrapper) {
     languageWrapper.style.display = isJoin ? 'none' : '';
@@ -855,13 +861,16 @@ async function startSession() {
   const me = meInput.value || 'Player 1';
   const peer = peerInput.value || 'Player 2';
   const localId = mode === 'solo' ? 'p1' : 'host';
-  const remoteId = mode === 'solo' ? 'p2' : 'client';
+  const remoteId = mode === 'solo' ? undefined : 'client';
+  const players = [localId];
+  if (remoteId) players.push(remoteId);
+
   const timerDurationSec = resolveTimerDurationSeconds();
   const timerEnabled = timerDurationSec > 0;
 
   await ensureLanguage(language);
 
-  const state = game.start(language, [localId, remoteId]);
+  const state = game.start(language, players);
   meta = {
     mode,
     language,
@@ -873,7 +882,10 @@ async function startSession() {
     timerDurationSec: timerEnabled ? timerDurationSec : undefined,
     turnDeadline: timerEnabled ? Date.now() + timerDurationSec * 1000 : null
   };
-  labels = { [localId]: me, [remoteId]: peer };
+  labels = { [localId]: me };
+  if (remoteId) {
+    labels[remoteId] = peer;
+  }
   currentState = state;
   placements = [];
   resetTurnTimer();
