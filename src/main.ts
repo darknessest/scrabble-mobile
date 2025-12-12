@@ -11,6 +11,7 @@ import { createClient, createHost, type P2PConnection } from './network/p2p';
 import { toQrDataUrl } from './network/qr';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
 import jsQR from 'jsqr';
+import { canStartInitialTurnTimer } from './core/sessionTimer';
 
 declare const __APP_VERSION__: string;
 
@@ -579,6 +580,14 @@ function resetTurnTimer() {
     return;
   }
 
+  // Gate the initial start so host doesn't start the clock before the peer connects.
+  if (!meta.turnDeadline && !canStartInitialTurnTimer(meta, Boolean(connection?.dataChannelReady))) {
+    meta.turnDeadline = null;
+    stopTimerTicker();
+    renderTimer();
+    return;
+  }
+
   meta.turnDeadline = Date.now() + meta.timerDurationSec * 1000;
   startTimerTicker();
 }
@@ -1125,6 +1134,7 @@ async function startSession() {
 
   const timerDurationSec = resolveTimerDurationSeconds();
   const timerEnabled = timerEnabledToggle.checked && timerDurationSec > 0;
+  const shouldStartTimerNow = mode === 'solo';
 
   await ensureLanguage(language);
 
@@ -1139,7 +1149,8 @@ async function startSession() {
     minWordLength,
     timerEnabled,
     timerDurationSec,
-    turnDeadline: timerEnabled ? Date.now() + timerDurationSec * 1000 : null
+    // In host P2P mode, start the first timer only after both users are connected.
+    turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null
   };
   labels = { [localId]: me };
   if (remoteId) {
@@ -1213,6 +1224,11 @@ function buildCallbacks() {
       p2pStatus.textContent = 'Connected';
       appendLog('Data channel open.');
       if (meta?.isHost && currentState) {
+        // If host started the session before the peer connected, arm the initial turn timer now.
+        if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline) {
+          resetTurnTimer();
+          void persistSnapshot();
+        }
         appendLog('Host: sending sync to peer.');
         sendSync();
       } else {
