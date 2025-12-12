@@ -23,6 +23,7 @@ interface SessionMeta {
   localPlayerId: string;
   remotePlayerId?: string;
   sessionId: string;
+  minWordLength?: number;
   timerEnabled?: boolean;
   timerDurationSec?: number;
   turnDeadline?: number | null;
@@ -108,7 +109,7 @@ app.innerHTML = `
             </select>
           </label>
           <label class="stack">
-            <span class="label">Minimum word length</span>
+            <span class="label">Minimum word length (solo/host)</span>
             <input id="min-length" type="number" min="1" value="2" />
             <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
           </label>
@@ -415,6 +416,10 @@ function setupEvents() {
     const val = Number(minLengthInput.value) || 2;
     setMinWordLength(val);
     appendLog(`Min word length set to ${val}`);
+    if (meta && meta.isHost) {
+      meta.minWordLength = val;
+      sendSync();
+    }
   });
 
   boardEl.addEventListener('click', onBoardClick);
@@ -438,6 +443,13 @@ function applyTimerInputFromMeta() {
     const minutes = Math.max(1, Math.round(meta.timerDurationSec / 60));
     timerInput.value = String(minutes);
   }
+}
+
+function applyMinLengthInputFromMeta() {
+  if (!meta?.minWordLength) return;
+  const val = Math.max(1, Math.floor(meta.minWordLength));
+  minLengthInput.value = String(val);
+  setMinWordLength(val);
 }
 
 function resolveTimerDurationSeconds() {
@@ -555,10 +567,19 @@ function applyModeUI() {
 function renderModeControls() {
   const isJoin = mode === 'client';
   const isSolo = mode === 'solo';
+  const meWrapper = meInput.closest('.stack') as HTMLElement;
   const peerWrapper = peerInput.closest('.stack') as HTMLElement;
-  if (peerWrapper) {
-    peerWrapper.style.display = isSolo ? 'none' : '';
+  const minLengthWrapper = minLengthInput.closest('.stack') as HTMLElement;
+  if (meWrapper) {
+    meWrapper.style.display = isJoin ? 'none' : '';
   }
+  if (peerWrapper) {
+    peerWrapper.style.display = isSolo || isJoin ? 'none' : '';
+  }
+  if (minLengthWrapper) {
+    minLengthWrapper.style.display = isJoin ? 'none' : '';
+  }
+  minLengthInput.disabled = isJoin;
 
   languageSelect.disabled = isJoin;
   if (languageWrapper) {
@@ -935,6 +956,9 @@ async function startSession() {
   const players = [localId];
   if (remoteId) players.push(remoteId);
 
+  const minWordLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
+  setMinWordLength(minWordLength);
+
   const timerDurationSec = resolveTimerDurationSeconds();
   const timerEnabled = timerDurationSec > 0;
 
@@ -948,6 +972,7 @@ async function startSession() {
     localPlayerId: localId,
     remotePlayerId: remoteId,
     sessionId: state.sessionId,
+    minWordLength,
     timerEnabled,
     timerDurationSec: timerEnabled ? timerDurationSec : undefined,
     turnDeadline: timerEnabled ? Date.now() + timerDurationSec * 1000 : null
@@ -1065,6 +1090,7 @@ async function handleMessage(data: unknown) {
     mode = meta.mode;
     applyModeUI();
     applyTimerInputFromMeta();
+    applyMinLengthInputFromMeta();
     if (meta.timerEnabled && meta.turnDeadline) {
       startTimerTicker();
     } else {
@@ -1341,6 +1367,7 @@ async function resumeSnapshot() {
   mode = pendingSnapshot.meta.mode;
   applyModeUI();
   applyTimerInputFromMeta();
+  applyMinLengthInputFromMeta();
   if (meta.timerEnabled && meta.turnDeadline) {
     startTimerTicker();
   } else {
