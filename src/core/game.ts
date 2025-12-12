@@ -370,11 +370,13 @@ function scoreCells(
     }
   });
 
+  const wordScore = total * wordMultiplier;
+
   if (placementKeys.size === 7 && isMain) {
-    total += 50;
+    return wordScore + 50;
   }
 
-  return total * wordMultiplier;
+  return wordScore;
 }
 
 function nextPlayer(players: string[], current: string): string {

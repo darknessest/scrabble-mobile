@@ -506,7 +506,7 @@ async function updateValidation() {
 
   wordCheckStatus.className = 'pill';
   if (result.success && result.words) {
-    wordCheckStatus.textContent = `Valid: ${result.words.join(', ')}`;
+    wordCheckStatus.textContent = `Valid: ${result.words.join(', ')} (+${result.scoreDelta})`;
     wordCheckStatus.classList.add('active');
   } else {
     wordCheckStatus.textContent = result.message || 'Invalid';
