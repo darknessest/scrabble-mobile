@@ -13,6 +13,8 @@ export interface P2PConnection {
   dataChannelReady: boolean;
 }
 
+type ChannelRef = { current: RTCDataChannel | null };
+
 const rtcConfig: RTCConfiguration = {
   iceServers: []
 };
@@ -22,11 +24,12 @@ export async function createHost(callbacks: P2PCallbacks) {
   const channel = pc.createDataChannel('scrabble-data', { negotiated: false });
   wireChannel(channel, callbacks);
   wirePeerLogging(pc, 'host', callbacks);
+  const channelRef: ChannelRef = { current: channel };
 
   const offer = await buildOffer(pc);
 
   return {
-    connection: buildConn(pc, channel),
+    connection: buildConn(pc, channelRef, 'host'),
     offer,
     applyAnswer: async (answer: string) => {
       const desc = decodeSDP(answer);
@@ -39,10 +42,10 @@ export async function createClient(callbacks: P2PCallbacks, offer: string) {
   const pc = new RTCPeerConnection(rtcConfig);
   wirePeerLogging(pc, 'client', callbacks);
 
-  let channel: RTCDataChannel | null = null;
+  const channelRef: ChannelRef = { current: null };
   pc.ondatachannel = (ev) => {
-    channel = ev.channel;
-    wireChannel(channel, callbacks);
+    channelRef.current = ev.channel;
+    wireChannel(ev.channel, callbacks);
   };
 
   const desc = decodeSDP(offer);
@@ -51,7 +54,7 @@ export async function createClient(callbacks: P2PCallbacks, offer: string) {
   const answer = await buildAnswer(pc);
 
   return {
-    connection: buildConn(pc, channel),
+    connection: buildConn(pc, channelRef, 'client'),
     answer,
     applyAck: async () => {
       // noop placeholder for symmetry
@@ -73,20 +76,21 @@ function wireChannel(channel: RTCDataChannel, callbacks: P2PCallbacks) {
   };
 }
 
-function buildConn(pc: RTCPeerConnection, channel: RTCDataChannel | null): P2PConnection {
+function buildConn(pc: RTCPeerConnection, channelRef: ChannelRef, role: 'host' | 'client'): P2PConnection {
   return {
-    role: channel?.id === 0 ? 'host' : 'client',
+    role,
     send: (data: unknown) => {
+      const channel = channelRef.current;
       if (channel?.readyState === 'open') {
         channel.send(JSON.stringify(data));
       }
     },
     close: () => {
-      channel?.close();
+      channelRef.current?.close();
       pc.close();
     },
     get dataChannelReady() {
-      return channel?.readyState === 'open';
+      return channelRef.current?.readyState === 'open';
     }
   };
 }
