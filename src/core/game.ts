@@ -156,12 +156,16 @@ export class ScrabbleGame {
     }
     const { removed, remaining } = removeTiles(state.racks[playerId], tileIds);
     state.racks[playerId] = remaining;
-    state.bag.push(...removed);
-    shuffleInPlace(state.bag);
     const drawCount = Math.min(removed.length, Math.max(0, 7 - state.racks[playerId].length));
+
+    // Draw before returning the exchanged tiles to the bag so you can't immediately
+    // draw back the same tiles you just exchanged.
+    shuffleInPlace(state.bag);
     if (drawCount > 0) {
       state.racks[playerId].push(...drawTiles(state.bag, drawCount));
     }
+    state.bag.push(...removed);
+    shuffleInPlace(state.bag);
     state.moveNumber += 1;
     state.currentPlayer = nextPlayer(state.players, playerId);
     return { success: true };

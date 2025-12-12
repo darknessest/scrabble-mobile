@@ -231,6 +231,7 @@ app.innerHTML = `
         <div class="row wrap gap">
           <button id="confirm-move" class="primary">Confirm move</button>
           <button id="clear-placements" class="ghost">Clear placements</button>
+          <button id="mix-rack" class="ghost" title="Shuffle your rack tiles">Mix</button>
           <button id="pass-btn" class="ghost">Pass</button>
           <button id="exchange-btn" class="ghost">Exchange selected</button>
         </div>
@@ -280,6 +281,7 @@ const logEl = document.querySelector<HTMLDivElement>('#log')!;
 const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
 const confirmMoveBtn = document.querySelector<HTMLButtonElement>('#confirm-move')!;
 const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-placements')!;
+const mixRackBtn = document.querySelector<HTMLButtonElement>('#mix-rack')!;
 const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
 const exchangeBtn = document.querySelector<HTMLButtonElement>('#exchange-btn')!;
 
@@ -328,6 +330,11 @@ let toastTimer: number | null = null;
 let lastShownTurnEventToken: string | null = null;
 let lastAutoPassToken: string | null = null;
 let autoPassInProgress = false;
+
+// Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
+// by tracking tile ids and reconciling against the authoritative rack on each update.
+let rackOrder: string[] = [];
+let rackOrderSessionId: string | null = null;
 
 setupEvents();
 renderNetworkStatus();
@@ -392,6 +399,12 @@ function setupEvents() {
     renderBoard();
     renderRack();
     updateValidation();
+  });
+  mixRackBtn.addEventListener('click', () => {
+    if (!currentState || !meta) return;
+    syncLocalRackOrder(currentState, meta);
+    rackOrder = shuffleCopy(rackOrder);
+    renderRack();
   });
   passBtn.addEventListener('click', () => submitPass());
   exchangeBtn.addEventListener('click', () => submitExchange());
@@ -836,9 +849,12 @@ function renderRack() {
     rackEl.innerHTML = '<p class="hint">No rack yet.</p>';
     return;
   }
+  syncLocalRackOrder(state, meta);
   const rack = state.racks[meta.localPlayerId] ?? [];
+  const byId = new Map(rack.map((t) => [t.id, t] as const));
+  const orderedRack = rackOrder.map((id) => byId.get(id)).filter(Boolean) as Tile[];
   const usedIds = new Set(placements.map((p) => p.tile.id));
-  const tiles = rack
+  const tiles = orderedRack
     .filter((t) => !usedIds.has(t.id))
     .map((t) => renderTile(t, t.id === selectedTileId))
     .join('');
@@ -1158,6 +1174,8 @@ async function startSession() {
   }
   currentState = state;
   placements = [];
+  rackOrder = [];
+  rackOrderSessionId = state.sessionId;
   resetTurnTimer();
   renderAll();
   updateValidation();
@@ -1264,6 +1282,8 @@ async function handleMessage(data: unknown) {
     labels = msg.labels;
     game.resume(msg.state);
     currentState = game.getState();
+    rackOrder = [];
+    rackOrderSessionId = currentState.sessionId;
     placements = [];
     remoteDraft = null;
     languageSelect.value = meta.language;
@@ -1473,6 +1493,34 @@ function sendDraftPlacements(nextPlacements: Placement[] = placements) {
     placements: nextPlacements,
     moveNumber: currentState.moveNumber
   } satisfies ActionMessage);
+}
+
+function syncLocalRackOrder(state: GameState, session: SessionMeta) {
+  if (rackOrderSessionId !== state.sessionId) {
+    rackOrder = [];
+    rackOrderSessionId = state.sessionId;
+  }
+  const rack = state.racks[session.localPlayerId] ?? [];
+  rackOrder = reconcileRackOrder(rackOrder, rack);
+}
+
+function reconcileRackOrder(prevOrder: string[], rack: Tile[]): string[] {
+  const present = new Set(rack.map((t) => t.id));
+  const next = prevOrder.filter((id) => present.has(id));
+  const already = new Set(next);
+  for (const tile of rack) {
+    if (!already.has(tile.id)) next.push(tile.id);
+  }
+  return next;
+}
+
+function shuffleCopy<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 async function ensureLanguage(language: Language) {
