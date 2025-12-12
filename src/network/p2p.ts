@@ -4,6 +4,7 @@ export interface P2PCallbacks {
   onClose?: () => void;
   onError?: (err: unknown) => void;
   onLog?: (msg: string) => void;
+  onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
 }
 
 export interface P2PConnection {
@@ -135,7 +136,10 @@ function waitForIce(pc: RTCPeerConnection): Promise<void> {
 function wirePeerLogging(pc: RTCPeerConnection, role: 'host' | 'client', callbacks: P2PCallbacks) {
   const log = (msg: string) => callbacks.onLog?.(`[${role}] ${msg}`);
   pc.onicegatheringstatechange = () => log(`iceGatheringState=${pc.iceGatheringState}`);
-  pc.onconnectionstatechange = () => log(`connectionState=${pc.connectionState}`);
+  pc.onconnectionstatechange = () => {
+    log(`connectionState=${pc.connectionState}`);
+    callbacks.onConnectionStateChange?.(pc.connectionState);
+  };
   pc.oniceconnectionstatechange = () => log(`iceConnectionState=${pc.iceConnectionState}`);
   pc.onicecandidate = (ev) => {
     if (!ev.candidate) {

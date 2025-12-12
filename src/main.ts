@@ -8,7 +8,7 @@ import {
   hasWord,
   setMinWordLength
 } from './dictionary/dictionaryService';
-import { createClient, createHost, type P2PConnection } from './network/p2p';
+import { createClient, createHost, type P2PCallbacks, type P2PConnection } from './network/p2p';
 import { toQrDataUrl } from './network/qr';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
 import jsQR from 'jsqr';
@@ -1203,6 +1203,7 @@ async function buildHostOffer() {
   offerText.value = offer;
   offerQr.src = await toQrDataUrl(offer);
   p2pStatus.textContent = 'Offer created - waiting for answer';
+  p2pStatus.className = 'pill';
   appendLog('Offer created. Share this code/QR, then paste the answer you get back.');
 }
 
@@ -1218,6 +1219,7 @@ async function applyHostAnswer() {
   }
   await hostApplyAnswer(answer);
   p2pStatus.textContent = 'Connecting...';
+  p2pStatus.className = 'pill';
   appendLog('Answer applied. Waiting for data channel to open.');
 }
 
@@ -1233,14 +1235,16 @@ async function buildClientAnswer() {
   clientAnswer.value = answer;
   answerQr.src = await toQrDataUrl(answer);
   p2pStatus.textContent = 'Answer ready - share with host';
+  p2pStatus.className = 'pill';
   appendLog('Answer created. Share this code/QR back to the host.');
 }
 
-function buildCallbacks() {
+function buildCallbacks(): P2PCallbacks {
   return {
     onMessage: (data: unknown) => handleMessage(data),
     onOpen: () => {
       p2pStatus.textContent = 'Connected';
+      p2pStatus.className = 'pill active';
       appendLog('Data channel open.');
       if (meta?.isHost && currentState) {
         // If host started the session before the peer connected, arm the initial turn timer now.
@@ -1256,14 +1260,71 @@ function buildCallbacks() {
       }
     },
     onClose: () => {
-      p2pStatus.textContent = 'Disconnected';
+      handleDisconnect();
     },
     onError: (err: unknown) => {
       appendLog(`P2P error: ${String(err)}`);
     },
-    onLog: (msg: string) => appendLog(msg)
+    onLog: (msg: string) => appendLog(msg),
+    onConnectionStateChange: (state) => {
+      if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+        handleDisconnect();
+      }
+    }
   };
 }
+
+function handleDisconnect() {
+  // Guard: If connection is null, we are likely manually resetting/reconnecting,
+  // so ignore callbacks from dying connections to prevent loops.
+  if (!connection) return;
+
+  if (p2pStatus.textContent === 'Connection lost') return;
+  p2pStatus.textContent = 'Connection lost';
+  p2pStatus.className = 'pill danger';
+  appendLog('P2P connection lost or failed.');
+
+  // If we are in the middle of a game, try to help the user reconnect.
+  if (currentState && mode !== 'solo') {
+    showToast('Connection lost. Attempting to restore...', 'danger');
+    void triggerReconnect();
+  }
+}
+
+async function triggerReconnect() {
+  if (mode === 'solo') return;
+
+  // Cleanup old connection if exists, preventing loop via null check in handleDisconnect
+  if (connection) {
+    const old = connection;
+    connection = null; // Sentinel to block handleDisconnect loop
+    try {
+      old.close();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // Ensure setup is visible so users can see the handshake UI
+  if (settingsHidden) {
+    settingsHidden = false;
+    renderVisibility();
+  }
+
+  if (mode === 'host') {
+    appendLog('Host: Connection lost. Recreating offer...');
+    // Small delay to ensure previous connection teardown
+    await new Promise(r => setTimeout(r, 500));
+    await buildHostOffer();
+    showToast('Connection lost. New offer created - ask client to scan.', 'info', 6000);
+  } else if (mode === 'client') {
+    appendLog('Client: Connection lost. Please re-scan host offer.');
+    p2pStatus.textContent = 'Disconnected';
+    p2pStatus.className = 'pill'; // Reset danger class
+    showToast('Connection lost. Please scan host offer again.', 'danger', 6000);
+  }
+}
+
 
 async function handleMessage(data: unknown) {
   const msg = data as ActionMessage;
@@ -1592,6 +1653,11 @@ async function resumeSnapshot() {
   renderAll();
   maybeShowTimeoutToastFromMeta(meta);
   appendLog('Resumed saved game.');
+
+  if (mode !== 'solo') {
+    appendLog('Resumed P2P session. Connection needed.');
+    void triggerReconnect();
+  }
 }
 
 function appendLog(msg: string) {
