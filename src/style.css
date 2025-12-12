@@ -301,7 +301,26 @@ h3 {
 
 .flex1 {
   flex: 1;
-  min-width: 0;
+  min-width: 120px;
+}
+
+/* Session form layout improvements */
+.card > .row.wrap.gap {
+  row-gap: 1rem;
+}
+
+.card > .row.wrap.gap > .stack {
+  min-width: 100px;
+}
+
+@media (min-width: 640px) {
+  .flex1 {
+    min-width: 160px;
+  }
+  
+  .card > .row.wrap.gap > .stack {
+    min-width: 140px;
+  }
 }
 
 .stack {
