@@ -727,6 +727,12 @@ function onBoardClick(ev: MouseEvent) {
     if (tile.blank) {
       selectBlankLetter(tile).then((updatedTile) => {
         if (updatedTile) {
+          // Replace existing placement if any
+          const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
+          if (existingIdx >= 0) {
+            placements.splice(existingIdx, 1);
+          }
+
           placements.push({ x, y, tile: updatedTile });
           selectedTileId = null;
           renderBoard();
@@ -735,6 +741,12 @@ function onBoardClick(ev: MouseEvent) {
         }
       });
       return;
+    }
+
+    // Replace existing placement if any
+    const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
+    if (existingIdx >= 0) {
+      placements.splice(existingIdx, 1);
     }
 
     placements.push({ x, y, tile });
