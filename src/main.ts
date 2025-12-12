@@ -129,7 +129,7 @@ app.innerHTML = `
                 <input id="turn-timer-enabled" type="checkbox" checked />
                 <span class="label">Enable turn timer</span>
               </label>
-              <label class="stack" style="max-width: 120px;">
+              <label class="stack" id="turn-timer-minutes" style="max-width: 120px;">
                 <span class="label">Minutes</span>
                 <input id="turn-timer" type="number" min="1" max="10" value="5" />
               </label>
@@ -261,6 +261,7 @@ const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snaps
 const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
 const minLengthInput = document.querySelector<HTMLInputElement>('#min-length')!;
 const timerEnabledToggle = document.querySelector<HTMLInputElement>('#turn-timer-enabled')!;
+const timerMinutesWrapper = document.querySelector<HTMLElement>('#turn-timer-minutes')!;
 const timerInput = document.querySelector<HTMLInputElement>('#turn-timer')!;
 const modeTabs = document.querySelector<HTMLDivElement>('#mode-tabs')!;
 const meInput = document.querySelector<HTMLInputElement>('#me-name')!;
@@ -518,10 +519,14 @@ function resolveTimerDurationSeconds() {
 }
 
 function updateTimerSettingsUI() {
-  // When timer is disabled, keep minutes input visible but disabled.
+  // When timer is disabled, hide the minutes selector entirely.
   const isJoin = mode === 'client';
+  const enabled = timerEnabledToggle.checked;
   timerEnabledToggle.disabled = isJoin;
-  timerInput.disabled = isJoin || !timerEnabledToggle.checked;
+  timerInput.disabled = isJoin || !enabled;
+  if (timerMinutesWrapper) {
+    timerMinutesWrapper.style.display = isJoin || !enabled ? 'none' : '';
+  }
 }
 
 function startTimerTicker() {
