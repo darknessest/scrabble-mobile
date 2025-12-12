@@ -67,25 +67,12 @@ app.innerHTML = `
     </header>
 
     <section class="cards setup-section" id="settings-section">
-      <div class="card">
-        <div class="card-head">
-          <h3>Dictionaries & Validation</h3>
+      <div class="card compact" id="dict-controls">
+        <div class="row wrap gap">
+          <span class="label">Dictionaries</span>
           <button class="ghost" id="refresh-dicts">Re-check</button>
-        </div>
-        <div class="row gap wrap">
-          <div class="stack">
-            <span class="label">Download packs</span>
-            <div class="row gap">
-              <button id="download-en" class="ghost">EN pack</button>
-              <button id="download-ru" class="ghost">RU pack</button>
-            </div>
-            <p class="hint">Downloads top-50k frequency lists (MIT) for offline validation; cached on device.</p>
-          </div>
-          <div class="stack">
-            <span class="label">Minimum word length</span>
-            <input id="min-length" type="number" min="1" value="2" />
-            <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
-          </div>
+          <button id="download-en" class="ghost">EN pack</button>
+          <button id="download-ru" class="ghost">RU pack</button>
         </div>
       </div>
 
@@ -114,6 +101,11 @@ app.innerHTML = `
               <option value="en">English</option>
               <option value="ru">Русский</option>
             </select>
+          </label>
+          <label class="stack">
+            <span class="label">Minimum word length</span>
+            <input id="min-length" type="number" min="1" value="2" />
+            <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
           </label>
           <label class="stack" id="session-timer">
             <span class="label">Turn timer (minutes)</span>
