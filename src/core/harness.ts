@@ -64,6 +64,7 @@ async function runTests() {
     testExchangeKeepsCounts,
     testWordValidation,
     testBlankTileHandling,
+    testPassOnEmptyBoardKeepsFirstMoveRules,
     testSoloModePlayerRotation
   ];
 
@@ -360,6 +361,42 @@ async function testBlankTileHandling(_dict: (word: string) => Promise<boolean>, 
     details: passed
       ? 'Blank tile assignment and placement works correctly.'
       : 'Blank tile handling failed.'
+  };
+}
+
+async function testPassOnEmptyBoardKeepsFirstMoveRules(
+  _dict: (word: string) => Promise<boolean>,
+  _isReal: boolean
+): Promise<TestResult> {
+  const game = new ScrabbleGame();
+  const state = game.start('en', ['p1', 'p2']);
+
+  const p2Tile: Tile = { id: 'p2t1', letter: 'A', value: 1 };
+  state.racks.p1 = [];
+  state.racks.p2 = [p2Tile];
+
+  const passResult = game.passTurn('p1');
+  if (!passResult.success) {
+    return { name: 'Pass on empty board keeps first-move rules', passed: false, details: 'Pass failed unexpectedly' };
+  }
+
+  // Still an empty board: next player should be allowed to make the first placement,
+  // and it should only be required to cover center (not "connect to existing tiles").
+  const ok = await game.placeMove('p2', [{ x: 7, y: 7, tile: p2Tile }], async () => true);
+  const bad = await game.placeMove('p1', [{ x: 0, y: 0, tile: { id: 'p1t1', letter: 'A', value: 1 } }], async () => true);
+
+  const passed =
+    ok.success &&
+    !bad.success &&
+    bad.message === 'First move must cover center' &&
+    game.getState().board[7][7].tile?.id === 'p2t1';
+
+  return {
+    name: 'Pass on empty board keeps first-move rules',
+    passed,
+    details: passed
+      ? 'After a pass on an empty board, the next player can open at center (no connection required).'
+      : `Unexpected results: ok=${ok.success ? 'success' : `fail(${ok.message})`}, bad=${bad.success ? 'success' : `fail(${bad.message})`}`
   };
 }
 

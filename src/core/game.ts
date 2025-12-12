@@ -76,10 +76,16 @@ export class ScrabbleGame {
     if (!orientation) {
       return { success: false, message: 'Tiles must align in a row or column' };
     }
-    if (state.moveNumber === 0 && !placements.some((p) => p.x === 7 && p.y === 7)) {
+
+    // "First move" should be determined by board state (empty vs non-empty),
+    // not by moveNumber. moveNumber increases on PASS/EXCHANGE, so relying on
+    // it breaks the rule when the opening turns are skipped.
+    const boardIsEmpty = !boardHasAnyTiles(state.board);
+
+    if (boardIsEmpty && !placements.some((p) => p.x === 7 && p.y === 7)) {
       return { success: false, message: 'First move must cover center' };
     }
-    if (state.moveNumber > 0 && !touchesExisting(state.board, placements)) {
+    if (!boardIsEmpty && !touchesExisting(state.board, placements)) {
       return { success: false, message: 'Move must connect to existing tiles' };
     }
     if (!isContiguous(state.board, placements, orientation)) {
@@ -166,6 +172,10 @@ function createBoard(): BoardCell[][] {
   return Array.from({ length: BOARD_SIZE }, () =>
     Array.from({ length: BOARD_SIZE }, () => ({ tile: null }))
   );
+}
+
+function boardHasAnyTiles(board: BoardCell[][]): boolean {
+  return board.some((row) => row.some((cell) => cell.tile !== null));
 }
 
 function drawTiles(bag: Tile[], count: number): Tile[] {
