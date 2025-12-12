@@ -214,6 +214,7 @@ app.innerHTML = `
             <span id="turn-indicator" class="pill"></span>
             <span id="timer-display" class="pill timer-pill"></span>
             <span id="word-check-status" class="pill" style="display: none"></span>
+            <span id="word-length-status" class="pill" style="display: none"></span>
           </div>
         </div>
         <div id="toast" class="toast" role="status" aria-live="polite" style="display: none"></div>
@@ -270,6 +271,7 @@ const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
 const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
 const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
 const wordCheckStatus = document.querySelector<HTMLSpanElement>('#word-check-status')!;
+const wordLengthStatus = document.querySelector<HTMLSpanElement>('#word-length-status')!;
 const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
@@ -650,6 +652,7 @@ async function updateValidation() {
     validationStatus = 'idle';
     renderBoard();
     wordCheckStatus.style.display = 'none';
+    wordLengthStatus.style.display = 'none';
     return;
   }
 
@@ -658,6 +661,7 @@ async function updateValidation() {
   wordCheckStatus.textContent = 'Checking...';
   wordCheckStatus.className = 'pill';
   wordCheckStatus.style.display = '';
+  wordLengthStatus.style.display = 'none';
 
   const preview = new ScrabbleGame();
   preview.resume(structuredClone(currentState));
@@ -676,9 +680,28 @@ async function updateValidation() {
   if (result.success && result.words) {
     wordCheckStatus.textContent = `Valid: ${result.words.join(', ')} (+${result.scoreDelta})`;
     wordCheckStatus.classList.add('active');
+    wordLengthStatus.style.display = 'none';
   } else {
     wordCheckStatus.textContent = result.message || 'Invalid';
     wordCheckStatus.classList.add('danger');
+
+    // Extra pill: show ONLY when failure is caused by min word length rule.
+    // Current engine reports "Invalid word: XYZ" for any dictionary rejection;
+    // we treat it as "too short" if that invalid word is shorter than the configured minimum.
+    const minWordLength = Math.max(
+      1,
+      Math.floor(meta.minWordLength ?? (Number(minLengthInput.value) || 2))
+    );
+    const invalidWordMatch = (result.message ?? '').match(/^Invalid word:\s*(.+)\s*$/);
+    const invalidWord = invalidWordMatch?.[1]?.trim() ?? '';
+    const isTooShort = Boolean(invalidWord) && invalidWord.length > 0 && invalidWord.length < minWordLength;
+    if (isTooShort) {
+      wordLengthStatus.className = 'pill danger';
+      wordLengthStatus.textContent = `Too short (min ${minWordLength})`;
+      wordLengthStatus.style.display = '';
+    } else {
+      wordLengthStatus.style.display = 'none';
+    }
   }
 }
 
