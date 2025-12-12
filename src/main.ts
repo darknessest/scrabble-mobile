@@ -1,6 +1,7 @@
 import './style.css';
 import { BOARD_SIZE, ScrabbleGame } from './core/game';
 import type { GameState, Language, Placement, Tile } from './core/types';
+import { reconcileOrder, shuffleCopy } from './ui/rackOrder';
 import {
   downloadDictionary,
   ensureDictionary,
@@ -1501,26 +1502,7 @@ function syncLocalRackOrder(state: GameState, session: SessionMeta) {
     rackOrderSessionId = state.sessionId;
   }
   const rack = state.racks[session.localPlayerId] ?? [];
-  rackOrder = reconcileRackOrder(rackOrder, rack);
-}
-
-function reconcileRackOrder(prevOrder: string[], rack: Tile[]): string[] {
-  const present = new Set(rack.map((t) => t.id));
-  const next = prevOrder.filter((id) => present.has(id));
-  const already = new Set(next);
-  for (const tile of rack) {
-    if (!already.has(tile.id)) next.push(tile.id);
-  }
-  return next;
-}
-
-function shuffleCopy<T>(arr: T[]): T[] {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
+  rackOrder = reconcileOrder(rackOrder, rack, (t) => t.id);
 }
 
 async function ensureLanguage(language: Language) {
