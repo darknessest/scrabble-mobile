@@ -218,7 +218,7 @@ describe('P2P Network', () => {
       onLog: vi.fn()
     };
 
-    const _host = await createHost(callbacks);
+    await createHost(callbacks);
     const pc = createdPCs[0];
 
     // Simulate connection state change to 'failed'
