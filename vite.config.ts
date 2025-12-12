@@ -31,6 +31,15 @@ export default defineConfig({
   base,
   define: {
     __APP_VERSION__: JSON.stringify(version)
+  },
+  test: {
+    globals: true,
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/core/**', 'src/dictionary/**']
+    }
   }
 });
 
