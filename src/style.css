@@ -649,6 +649,18 @@ button.danger:hover {
   animation: pulse-glow 1.5s ease-in-out infinite;
 }
 
+/* Remote player's in-progress move preview (ghosted) */
+.cell.remote-draft {
+  opacity: 0.55;
+  box-shadow: inset 0 0 0 2px rgba(148, 163, 184, 0.35);
+}
+
+.cell.remote-draft:hover {
+  transform: none;
+  z-index: 0;
+  box-shadow: inset 0 0 0 2px rgba(148, 163, 184, 0.45);
+}
+
 .cell.pending.valid {
   animation: none;
   box-shadow: 0 0 0 2px var(--accent-green), 0 0 14px rgba(34, 197, 94, 0.45);

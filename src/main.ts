@@ -38,6 +38,7 @@ type ActionMessage =
   | { type: 'ACTION_MOVE'; placements: Placement[]; playerId: string }
   | { type: 'ACTION_PASS'; playerId: string }
   | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
+  | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
   | { type: 'REQUEST_SYNC' }
   | { type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> };
 
@@ -296,6 +297,7 @@ let logsHidden = false;
 let timerTicker: number | null = null;
 let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
 let validationNonce = 0;
+let remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null = null;
 
 setupEvents();
 renderNetworkStatus();
@@ -356,6 +358,7 @@ function setupEvents() {
   clearPlacementsBtn.addEventListener('click', () => {
     placements = [];
     selectedTileId = null;
+    sendDraftPlacements();
     renderBoard();
     renderRack();
     updateValidation();
@@ -584,14 +587,24 @@ function renderBoard() {
   }
 
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
+  const ghostPlacements =
+    remoteDraft &&
+      remoteDraft.moveNumber === state.moveNumber &&
+      remoteDraft.playerId === state.currentPlayer &&
+      remoteDraft.playerId !== meta?.localPlayerId
+      ? remoteDraft.placements
+      : [];
+  const ghostKeys = new Set(ghostPlacements.map((p) => `${p.x},${p.y}`));
   const rows: string[] = [];
   for (let y = 0; y < BOARD_SIZE; y += 1) {
     const cells: string[] = [];
     for (let x = 0; x < BOARD_SIZE; x += 1) {
       const placed = placements.find((p) => p.x === x && p.y === y);
-      const tile = placed?.tile ?? state.board[y][x].tile;
+      const ghostPlaced = !placed ? ghostPlacements.find((p) => p.x === x && p.y === y) : undefined;
+      const tile = placed?.tile ?? ghostPlaced?.tile ?? state.board[y][x].tile;
       const premium = premiumClass(x, y);
       const isNew = placementKeys.has(`${x},${y}`);
+      const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
       const validationClass =
         isNew && validationStatus === 'valid'
           ? 'valid'
@@ -600,7 +613,15 @@ function renderBoard() {
             : isNew && validationStatus === 'checking'
               ? 'checking'
               : '';
-      const classes = ['cell', premium, isNew ? 'pending' : '', validationClass].filter(Boolean).join(' ');
+      const classes = [
+        'cell',
+        premium,
+        isNew ? 'pending' : '',
+        isGhost ? 'remote-draft' : '',
+        validationClass
+      ]
+        .filter(Boolean)
+        .join(' ');
       cells.push(
         `<div class="${classes}" data-x="${x}" data-y="${y}">
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
@@ -754,6 +775,7 @@ function onBoardClick(ev: MouseEvent) {
 
           placements.push({ x, y, tile: updatedTile });
           selectedTileId = null;
+          sendDraftPlacements();
           renderBoard();
           renderRack();
           updateValidation();
@@ -770,6 +792,7 @@ function onBoardClick(ev: MouseEvent) {
 
     placements.push({ x, y, tile });
     selectedTileId = null;
+    sendDraftPlacements();
     renderBoard();
     renderRack();
     updateValidation();
@@ -778,6 +801,7 @@ function onBoardClick(ev: MouseEvent) {
     const idx = placements.findIndex((p) => p.x === x && p.y === y);
     if (idx >= 0) {
       placements.splice(idx, 1);
+      sendDraftPlacements();
       renderBoard();
       renderRack();
       updateValidation();
@@ -1036,6 +1060,7 @@ async function handleMessage(data: unknown) {
     game.resume(msg.state);
     currentState = game.getState();
     placements = [];
+    remoteDraft = null;
     languageSelect.value = meta.language;
     mode = meta.mode;
     applyModeUI();
@@ -1052,6 +1077,19 @@ async function handleMessage(data: unknown) {
     return;
   }
 
+  if (msg.type === 'DRAFT_PLACEMENTS') {
+    // Draft placements are a visual-only preview of the current-turn player's in-progress move.
+    // Ignore until we have a game state (i.e., synced).
+    if (!currentState) return;
+    remoteDraft = {
+      playerId: msg.playerId,
+      placements: msg.placements,
+      moveNumber: msg.moveNumber
+    };
+    renderBoard();
+    return;
+  }
+
   if (msg.type === 'REQUEST_SYNC') {
     if (meta?.isHost && currentState) sendSync();
     return;
@@ -1065,6 +1103,7 @@ async function handleMessage(data: unknown) {
   await ensureLanguage(meta.language);
 
   if (msg.type === 'ACTION_MOVE') {
+    remoteDraft = null;
     const result = await game.placeMove(
       msg.playerId,
       msg.placements,
@@ -1080,6 +1119,7 @@ async function handleMessage(data: unknown) {
       appendLog(result.message ?? 'Move rejected');
     }
   } else if (msg.type === 'ACTION_PASS') {
+    remoteDraft = null;
     const result = game.passTurn(msg.playerId);
     if (result.success) {
       currentState = game.getState();
@@ -1089,6 +1129,7 @@ async function handleMessage(data: unknown) {
       renderAll();
     }
   } else if (msg.type === 'ACTION_EXCHANGE') {
+    remoteDraft = null;
     const result = game.exchangeTiles(msg.playerId, msg.tileIds);
     if (result.success) {
       currentState = game.getState();
@@ -1134,6 +1175,7 @@ async function submitMove() {
       playerId: meta.localPlayerId
     } satisfies ActionMessage);
     placements = [];
+    sendDraftPlacements();
     renderBoard();
     renderRack();
     updateValidation();
@@ -1209,6 +1251,20 @@ function sendSync() {
   };
   connection.send(payload);
   appendLog('Sync pushed to peer.');
+}
+
+function sendDraftPlacements(nextPlacements: Placement[] = placements) {
+  if (!connection || !currentState || !meta) return;
+  if (meta.mode === 'solo') return;
+  if (!connection.dataChannelReady) return;
+  // Only broadcast drafts for the current-turn player.
+  if (currentState.currentPlayer !== meta.localPlayerId) return;
+  connection.send({
+    type: 'DRAFT_PLACEMENTS',
+    playerId: meta.localPlayerId,
+    placements: nextPlacements,
+    moveNumber: currentState.moveNumber
+  } satisfies ActionMessage);
 }
 
 async function ensureLanguage(language: Language) {
