@@ -63,6 +63,7 @@ async function runTests() {
     testRejectsTilesNotInRack,
     testExchangeKeepsCounts,
     testWordValidation,
+    testIntersectionValidatesAllWords,
     testBlankTileHandling,
     testPassOnEmptyBoardKeepsFirstMoveRules,
     testSoloModePlayerRotation
@@ -327,6 +328,64 @@ async function testWordValidation(dict: (word: string) => Promise<boolean>, isRe
     details: passed
       ? `Dictionary parsing works correctly (${isReal ? 'real' : 'test'} dictionary).`
       : `Valid "${testWords.valid[0]}": ${validResult.success}, Invalid "${testWords.invalid[0]}": ${invalidResult.success}`
+  };
+}
+
+async function testIntersectionValidatesAllWords(_dict: (word: string) => Promise<boolean>, _isReal: boolean): Promise<TestResult> {
+  // Board setup:
+  //   Horizontal: C _ T  (place A to form CAT)
+  //   Vertical:   R _ N  (place A to form RAN)
+  const game = new ScrabbleGame();
+  const state = game.start('en', ['p1', 'p2']);
+
+  const c: Tile = { id: 'c1', letter: 'C', value: 3 };
+  const t: Tile = { id: 't1', letter: 'T', value: 1 };
+  const r: Tile = { id: 'r1', letter: 'R', value: 1 };
+  const n: Tile = { id: 'n1', letter: 'N', value: 1 };
+  const a: Tile = { id: 'a1', letter: 'A', value: 1 };
+
+  // Seed board with existing tiles (bypassing move rules; this is a harness test).
+  state.board[7][6].tile = c; // (6,7)
+  state.board[7][8].tile = t; // (8,7)
+  state.board[6][7].tile = r; // (7,6)
+  state.board[8][7].tile = n; // (7,8)
+
+  state.racks.p1 = [a];
+  state.racks.p2 = [];
+  state.currentPlayer = 'p1';
+
+  const allowed = new Set(['CAT', 'RAN']);
+  const resultOk = await game.placeMove('p1', [{ x: 7, y: 7, tile: a }], async (w: string) => allowed.has(w.toUpperCase()));
+
+  // Reset and try with a dictionary that rejects one of the formed words.
+  const game2 = new ScrabbleGame();
+  const state2 = game2.start('en', ['p1', 'p2']);
+  state2.board[7][6].tile = c;
+  state2.board[7][8].tile = t;
+  state2.board[6][7].tile = r;
+  state2.board[8][7].tile = n;
+  state2.racks.p1 = [a];
+  state2.racks.p2 = [];
+  state2.currentPlayer = 'p1';
+
+  const allowedOnlyCat = new Set(['CAT']);
+  const resultBad = await game2.placeMove(
+    'p1',
+    [{ x: 7, y: 7, tile: a }],
+    async (w: string) => allowedOnlyCat.has(w.toUpperCase())
+  );
+
+  const words = resultOk.words ?? [];
+  const okHasBoth = resultOk.success && words.includes('CAT') && words.includes('RAN');
+  const badRejected = !resultBad.success && (resultBad.message ?? '').includes('Invalid word');
+
+  const passed = okHasBoth && badRejected;
+  return {
+    name: 'Validates all words formed at an intersection (both directions)',
+    passed,
+    details: passed
+      ? 'Intersection placement validates both horizontal and vertical words.'
+      : `ok=${resultOk.success ? 'success' : `fail(${resultOk.message})`}, words=${JSON.stringify(words)}, bad=${resultBad.success ? 'success' : `fail(${resultBad.message})`}`
   };
 }
 

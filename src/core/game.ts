@@ -294,32 +294,76 @@ async function computeScore(
 
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
 
-  const mainCells = collectWord(tempBoard, placements[0], orientation);
-  const mainWord = mainCells.map((c) => c.tile.letter).join('');
+  const formedWords = collectFormedWords(tempBoard, placements, orientation);
 
-  const crossResults = placements.map((p) => {
-    const cells = collectWord(tempBoard, p, flip(orientation));
-    const word = cells.map((c) => c.tile.letter).join('');
-    return { word, cells };
-  });
-
-  const crossWords = crossResults.filter((c) => c.word.length > 1);
-  const allWords = [mainWord, ...crossWords.map((c) => c.word)];
-
-  for (const word of allWords) {
+  for (const { word } of formedWords) {
     const valid = await checkWord(word, language);
-    if (!valid) {
-      throw new Error(`Invalid word: ${word}`);
-    }
+    if (!valid) throw new Error(`Invalid word: ${word}`);
   }
 
   let totalScore = 0;
-  totalScore += scoreCells(mainCells, placementKeys, true);
-  crossWords.forEach((c) => {
-    totalScore += scoreCells(c.cells, placementKeys, false);
-  });
+  for (const { cells } of formedWords) {
+    totalScore += scoreCells(cells, placementKeys);
+  }
 
-  return { words: allWords, score: totalScore };
+  // Bingo bonus (using all 7 tiles) applies once per move, not per word.
+  if (placementKeys.size === 7) totalScore += 50;
+
+  return { words: formedWords.map((w) => w.word), score: totalScore };
+}
+
+function collectFormedWords(
+  board: BoardCell[][],
+  placements: Placement[],
+  orientation: Orientation
+): Array<{ word: string; cells: Array<{ x: number; y: number; tile: Tile; premium?: Premium }> }> {
+  // We keep exactly one "primary" word (same behavior as before), even if it is
+  // a single-letter word (used by some harness tests / loose rules).
+  const primaryCells = selectPrimaryWordCells(board, placements, orientation);
+
+  const wordsByKey = new Map<
+    string,
+    { word: string; cells: Array<{ x: number; y: number; tile: Tile; premium?: Premium }> }
+  >();
+
+  const addWord = (dir: Orientation, cells: Array<{ x: number; y: number; tile: Tile; premium?: Premium }>) => {
+    if (cells.length === 0) return;
+    const key = `${dir}:${cells[0].x},${cells[0].y}`;
+    if (wordsByKey.has(key)) return;
+    wordsByKey.set(key, { word: cells.map((c) => c.tile.letter).join(''), cells });
+  };
+
+  // Add the primary word (even if length 1).
+  addWord(orientation, primaryCells);
+
+  // Add every other word formed by the placements in BOTH directions.
+  // We include only length>1 here to avoid counting/validating the same single-letter
+  // "word" twice (e.g. first move with a single tile).
+  for (const p of placements) {
+    const rowCells = collectWord(board, p, 'row');
+    if (rowCells.length > 1) addWord('row', rowCells);
+
+    const colCells = collectWord(board, p, 'col');
+    if (colCells.length > 1) addWord('col', colCells);
+  }
+
+  return [...wordsByKey.values()];
+}
+
+function selectPrimaryWordCells(
+  board: BoardCell[][],
+  placements: Placement[],
+  orientation: Orientation
+): Array<{ x: number; y: number; tile: Tile; premium?: Premium }> {
+  if (placements.length !== 1) {
+    return collectWord(board, placements[0], orientation);
+  }
+
+  // For a single tile, choose the longer word direction as primary.
+  const rowCells = collectWord(board, placements[0], 'row');
+  const colCells = collectWord(board, placements[0], 'col');
+  if (colCells.length > rowCells.length) return colCells;
+  return rowCells;
 }
 
 function collectWord(
@@ -352,14 +396,9 @@ function collectWord(
   return cells;
 }
 
-function flip(orientation: Orientation): Orientation {
-  return orientation === 'row' ? 'col' : 'row';
-}
-
 function scoreCells(
   cells: Array<{ x: number; y: number; tile: Tile; premium?: Premium }>,
-  placementKeys: Set<string>,
-  isMain: boolean
+  placementKeys: Set<string>
 ): number {
   let total = 0;
   let wordMultiplier = 1;
@@ -381,11 +420,6 @@ function scoreCells(
   });
 
   const wordScore = total * wordMultiplier;
-
-  if (placementKeys.size === 7 && isMain) {
-    return wordScore + 50;
-  }
-
   return wordScore;
 }
 
