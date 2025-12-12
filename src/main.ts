@@ -234,7 +234,7 @@ app.innerHTML = `
           <button id="clear-placements" class="ghost">Clear placements</button>
           <button id="mix-rack" class="ghost" title="Shuffle your rack tiles">Mix</button>
           <button id="pass-btn" class="ghost">Pass</button>
-          <button id="exchange-btn" class="ghost">Exchange selected</button>
+          <button id="exchange-btn" class="ghost">Replace & pass</button>
         </div>
       </div>
 
