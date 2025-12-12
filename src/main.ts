@@ -379,7 +379,21 @@ function setupEvents() {
     })
   );
 
-  refreshDictsBtn.addEventListener('click', () => refreshDictStatus());
+  refreshDictsBtn.addEventListener('click', async () => {
+    // Give immediate visual feedback so status never looks "missing"
+    dictEnIcon.textContent = '⏳';
+    dictRuIcon.textContent = '⏳';
+    dictStatus.textContent = 'Dictionaries: checking...';
+    try {
+      await refreshDictStatus();
+    } catch (err) {
+      dictEnIcon.textContent = '❌';
+      dictRuIcon.textContent = '❌';
+      dictStatus.textContent = 'Dictionaries: check failed';
+      dictStatus.classList.add('danger');
+      appendLog(`Dictionary status check failed: ${String(err)}`);
+    }
+  });
   downloadEnBtn.addEventListener('click', () => downloadLanguage('en'));
   downloadRuBtn.addEventListener('click', () => downloadLanguage('ru'));
   requestSyncBtn.addEventListener('click', () => {
