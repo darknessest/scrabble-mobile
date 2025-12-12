@@ -1,7 +1,17 @@
 const DB_NAME = 'scrabble-pwa';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented to support new dictionary schema
 const DICT_STORE = 'dictionaries';
 const SNAPSHOT_STORE = 'snapshots';
+
+export interface DictionaryEntry {
+  word: string;           // Uppercase word
+  pos?: string[];         // Parts of speech: noun, verb, adj, etc.
+  plural?: string;        // Plural form (if applicable)
+  base?: string;          // Base/infinitive form
+  forms?: string[];       // Other valid forms
+}
+
+export type DictionaryData = DictionaryEntry[] | string; // Support both old (string) and new (structured) format
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -20,22 +30,45 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveDictionary(language: string, data: string) {
+export async function saveDictionary(language: string, data: DictionaryData) {
   const db = await openDb();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(DICT_STORE, 'readwrite');
-    tx.objectStore(DICT_STORE).put(data, language);
+    // Store as JSON string for structured data, or plain string for legacy format
+    const value = typeof data === 'string' ? data : JSON.stringify(data);
+    tx.objectStore(DICT_STORE).put(value, language);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
 
-export async function loadDictionary(language: string): Promise<string | null> {
+export async function loadDictionary(language: string): Promise<DictionaryData | null> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(DICT_STORE, 'readonly');
     const req = tx.objectStore(DICT_STORE).get(language);
-    req.onsuccess = () => resolve((req.result as string | undefined) ?? null);
+    req.onsuccess = () => {
+      const result = req.result;
+      if (!result) {
+        resolve(null);
+        return;
+      }
+      // Try to parse as JSON (new format), fall back to string (legacy format)
+      if (typeof result === 'string') {
+        try {
+          const parsed = JSON.parse(result);
+          if (Array.isArray(parsed)) {
+            resolve(parsed as DictionaryEntry[]);
+          } else {
+            resolve(result); // Legacy string format
+          }
+        } catch {
+          resolve(result); // Legacy string format
+        }
+      } else {
+        resolve(result);
+      }
+    };
     req.onerror = () => reject(req.error);
   });
 }

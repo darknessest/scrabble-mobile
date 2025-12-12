@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Dictionary processing
+scripts/data/raw/
+scripts/data/*.txt
+scripts/data/*.csv
+# Compressed dictionaries are stored in assets branch, not main branch
+public/dicts/*.json.gz
+# Keep uncompressed dictionaries in public/dicts/*.json for local development

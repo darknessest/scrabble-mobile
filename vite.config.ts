@@ -30,7 +30,11 @@ const version = getVersion();
 export default defineConfig({
   base,
   define: {
-    __APP_VERSION__: JSON.stringify(version)
+    __APP_VERSION__: JSON.stringify(version),
+    // Inject GitHub repository name if available (for dictionary assets)
+    ...(process.env.GITHUB_REPOSITORY && {
+      'import.meta.env.VITE_GITHUB_REPO': JSON.stringify(process.env.GITHUB_REPOSITORY)
+    })
   },
   test: {
     globals: true,

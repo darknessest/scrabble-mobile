@@ -10,7 +10,9 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "dicts:download": "node scripts/download-dicts.js",
+    "dicts:parse": "node scripts/parse-dicts.js"
   },
   "dependencies": {
     "jsqr": "^1.4.0",
