@@ -102,7 +102,7 @@ describe('ScrabbleGame Integration', () => {
         const letters1 = ['F', 'A', 'S', 'T'];
         letters1.forEach((l, i) => { rack1[i].letter = l; rack1[i].value = 1; }); // simplified values
 
-        let placements: Placement[] = letters1.map((l, i) => ({
+        let placements: Placement[] = letters1.map((_, i) => ({
             x: 7 + i, y: 7, tile: rack1[i]
         }));
 
@@ -117,7 +117,7 @@ describe('ScrabbleGame Integration', () => {
         const letters2 = ['A', 'C', 'E'];
         letters2.forEach((l, i) => { rack2[i].letter = l; rack2[i].value = 1; });
 
-        placements = letters2.map((l, i) => ({
+        placements = letters2.map((_, i) => ({
             x: 7 + i, y: 8, tile: rack2[i]
         }));
 
@@ -144,7 +144,7 @@ describe('ScrabbleGame Integration', () => {
         const letters = ['H', 'E', 'L', 'L', 'O'];
         letters.forEach((l, i) => { rack[i].letter = l; rack[i].value = 1; });
 
-        let placements: Placement[] = letters.map((l, i) => ({
+        let placements: Placement[] = letters.map((_, i) => ({
             x: 7, y: 7 + i, tile: rack[i] // Vertical at 7,7
         }));
 
