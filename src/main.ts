@@ -197,6 +197,7 @@ app.innerHTML = `
             <span class="label">Turn:</span>
             <span id="turn-indicator" class="pill"></span>
             <span id="timer-display" class="pill timer-pill"></span>
+            <span id="word-check-status" class="pill" style="display: none"></span>
           </div>
         </div>
         <div id="board" class="board"></div>
@@ -250,6 +251,7 @@ const rackEl = document.querySelector<HTMLDivElement>('#rack')!;
 const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
 const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
 const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
+const wordCheckStatus = document.querySelector<HTMLSpanElement>('#word-check-status')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
 const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
@@ -479,11 +481,15 @@ async function updateValidation() {
   if (!currentState || !meta || placements.length === 0) {
     validationStatus = 'idle';
     renderBoard();
+    wordCheckStatus.style.display = 'none';
     return;
   }
 
   validationStatus = 'checking';
   renderBoard();
+  wordCheckStatus.textContent = 'Checking...';
+  wordCheckStatus.className = 'pill';
+  wordCheckStatus.style.display = '';
 
   const preview = new ScrabbleGame();
   preview.resume(structuredClone(currentState));
@@ -497,6 +503,15 @@ async function updateValidation() {
 
   validationStatus = result.success ? 'valid' : 'invalid';
   renderBoard();
+
+  wordCheckStatus.className = 'pill';
+  if (result.success && result.words) {
+    wordCheckStatus.textContent = `Valid: ${result.words.join(', ')}`;
+    wordCheckStatus.classList.add('active');
+  } else {
+    wordCheckStatus.textContent = result.message || 'Invalid';
+    wordCheckStatus.classList.add('danger');
+  }
 }
 
 function renderHandshakeVisibility() {

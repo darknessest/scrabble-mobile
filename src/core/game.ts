@@ -121,7 +121,7 @@ export class ScrabbleGame {
     state.moveNumber += 1;
     state.currentPlayer = nextPlayer(state.players, playerId);
 
-    return { success: true, scoreDelta: scoreResult.score };
+    return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
   }
 
   passTurn(playerId: string): MoveResult {

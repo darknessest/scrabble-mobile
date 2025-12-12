@@ -40,5 +40,6 @@ export interface MoveResult {
   success: boolean;
   message?: string;
   scoreDelta?: number;
+  words?: string[];
 }
 
