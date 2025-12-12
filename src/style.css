@@ -374,6 +374,39 @@ input[type="number"] {
   max-width: 100px;
 }
 
+input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  accent-color: var(--accent-blue);
+}
+
+/* Toast notifications */
+.toast {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5000;
+  max-width: min(560px, calc(100vw - 2rem));
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.95);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.toast.info {
+  background: rgba(51, 65, 85, 0.95);
+}
+
+.toast.danger {
+  background: linear-gradient(135deg, var(--accent-red), #dc2626);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
 /* Buttons */
 button {
   display: inline-flex;

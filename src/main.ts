@@ -27,12 +27,22 @@ interface SessionMeta {
   timerEnabled?: boolean;
   timerDurationSec?: number;
   turnDeadline?: number | null;
+  lastTurnEvent?: TurnEvent;
 }
 
 interface SnapshotPayload {
   state: GameState;
   meta: SessionMeta;
   labels: Record<string, string>;
+}
+
+type TurnEventType = 'timeout';
+
+interface TurnEvent {
+  type: TurnEventType;
+  playerId: string;
+  at: number;
+  moveNumber: number;
 }
 
 type ActionMessage =
@@ -113,11 +123,19 @@ app.innerHTML = `
             <input id="min-length" type="number" min="1" value="2" />
             <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
           </label>
-          <label class="stack" id="session-timer">
-            <span class="label">Turn timer (minutes)</span>
-            <input id="turn-timer" type="number" min="1" max="10" value="5" />
-            <p class="hint">Applies to solo/host; shared with peers.</p>
-          </label>
+          <div class="stack" id="session-timer">
+            <div class="row gap wrap">
+              <label class="row gap" style="align-items: center;">
+                <input id="turn-timer-enabled" type="checkbox" checked />
+                <span class="label">Enable turn timer</span>
+              </label>
+              <label class="stack" style="max-width: 120px;">
+                <span class="label">Minutes</span>
+                <input id="turn-timer" type="number" min="1" max="10" value="5" />
+              </label>
+            </div>
+            <p class="hint">Host/solo only; shared with peers. When time runs out, the turn auto-passes.</p>
+          </div>
         </div>
         <div class="row gap">
           <button id="start-btn" class="primary">Start</button>
@@ -198,6 +216,7 @@ app.innerHTML = `
             <span id="word-check-status" class="pill" style="display: none"></span>
           </div>
         </div>
+        <div id="toast" class="toast" role="status" aria-live="polite" style="display: none"></div>
         <div id="board" class="board"></div>
       </div>
 
@@ -240,6 +259,7 @@ const resumeBtn = document.querySelector<HTMLButtonElement>('#resume-btn')!;
 const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snapshot')!;
 const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
 const minLengthInput = document.querySelector<HTMLInputElement>('#min-length')!;
+const timerEnabledToggle = document.querySelector<HTMLInputElement>('#turn-timer-enabled')!;
 const timerInput = document.querySelector<HTMLInputElement>('#turn-timer')!;
 const modeTabs = document.querySelector<HTMLDivElement>('#mode-tabs')!;
 const meInput = document.querySelector<HTMLInputElement>('#me-name')!;
@@ -250,6 +270,7 @@ const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
 const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
 const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
 const wordCheckStatus = document.querySelector<HTMLSpanElement>('#word-check-status')!;
+const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
 const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
@@ -299,6 +320,10 @@ let timerTicker: number | null = null;
 let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
 let validationNonce = 0;
 let remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null = null;
+let toastTimer: number | null = null;
+let lastShownTurnEventToken: string | null = null;
+let lastAutoPassToken: string | null = null;
+let autoPassInProgress = false;
 
 setupEvents();
 renderNetworkStatus();
@@ -422,6 +447,31 @@ function setupEvents() {
     }
   });
 
+  timerEnabledToggle.addEventListener('change', () => {
+    updateTimerSettingsUI();
+    // Only host/solo can change session meta.
+    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
+    meta.timerEnabled = timerEnabledToggle.checked;
+    // Preserve the chosen duration even when disabled (handy when re-enabling).
+    meta.timerDurationSec = resolveTimerDurationSeconds();
+    resetTurnTimer();
+    renderAll();
+    void persistSnapshot();
+    sendSync();
+  });
+
+  timerInput.addEventListener('change', () => {
+    updateTimerSettingsUI();
+    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
+    meta.timerDurationSec = resolveTimerDurationSeconds();
+    if (meta.timerEnabled) {
+      resetTurnTimer();
+      renderAll();
+      void persistSnapshot();
+      sendSync();
+    }
+  });
+
   boardEl.addEventListener('click', onBoardClick);
   rackEl.addEventListener('click', onRackClick);
 }
@@ -439,10 +489,17 @@ function renderVersion() {
 }
 
 function applyTimerInputFromMeta() {
-  if (meta?.timerDurationSec) {
+  if (!meta) return;
+  // Back-compat: old snapshots may have duration/deadline but no explicit enabled flag.
+  if (meta.timerEnabled === undefined) {
+    meta.timerEnabled = Boolean(meta.timerDurationSec);
+  }
+  timerEnabledToggle.checked = Boolean(meta.timerEnabled);
+  if (meta.timerDurationSec) {
     const minutes = Math.max(1, Math.round(meta.timerDurationSec / 60));
     timerInput.value = String(minutes);
   }
+  updateTimerSettingsUI();
 }
 
 function applyMinLengthInputFromMeta() {
@@ -456,6 +513,13 @@ function resolveTimerDurationSeconds() {
   const minutes = Number(timerInput.value) || 0;
   if (Number.isNaN(minutes) || minutes <= 0) return 0;
   return Math.min(Math.max(minutes, 1), 10) * 60;
+}
+
+function updateTimerSettingsUI() {
+  // When timer is disabled, keep minutes input visible but disabled.
+  const isJoin = mode === 'client';
+  timerEnabledToggle.disabled = isJoin;
+  timerInput.disabled = isJoin || !timerEnabledToggle.checked;
 }
 
 function startTimerTicker() {
@@ -488,6 +552,10 @@ function renderTimer() {
   timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
   timerDisplay.classList.toggle('danger', clamped === 0);
   timerDisplay.classList.toggle('active', clamped > 0);
+
+  if (clamped === 0) {
+    void maybeAutoPassOnTimeout();
+  }
 }
 
 function resetTurnTimer() {
@@ -506,6 +574,72 @@ function resetTurnTimer() {
 
   meta.turnDeadline = Date.now() + meta.timerDurationSec * 1000;
   startTimerTicker();
+}
+
+function showToast(message: string, variant: 'info' | 'danger' = 'info', ms = 4500) {
+  if (!toastEl) return;
+  toastEl.textContent = message;
+  toastEl.className = `toast ${variant}`;
+  toastEl.style.display = '';
+  if (toastTimer) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toastEl.style.display = 'none';
+  }, ms);
+}
+
+function maybeShowTimeoutToastFromMeta(incoming: SessionMeta) {
+  const ev = incoming.lastTurnEvent;
+  if (!ev || ev.type !== 'timeout') return;
+  const token = `${ev.type}:${ev.playerId}:${ev.moveNumber}:${ev.at}`;
+  if (token === lastShownTurnEventToken) return;
+  lastShownTurnEventToken = token;
+
+  const playerName = labels[ev.playerId] ?? ev.playerId;
+  const isMe = incoming.localPlayerId === ev.playerId;
+  showToast(isMe ? "Time's up — you were auto-passed." : `Time's up — ${playerName} was auto-passed.`, 'danger');
+}
+
+async function maybeAutoPassOnTimeout() {
+  if (!meta || !currentState) return;
+  // Host (or solo) is authoritative for turn advancement.
+  if (!meta.isHost && meta.mode !== 'solo') return;
+  if (!meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) return;
+
+  const remainingMs = meta.turnDeadline - Date.now();
+  if (remainingMs > 0) return;
+
+  const token = `${currentState.sessionId}:${currentState.moveNumber}:${currentState.currentPlayer}:${meta.turnDeadline}`;
+  if (token === lastAutoPassToken || autoPassInProgress) return;
+  lastAutoPassToken = token;
+  autoPassInProgress = true;
+
+  try {
+    remoteDraft = null;
+    const timedOutPlayerId = currentState.currentPlayer;
+    const result = game.passTurn(timedOutPlayerId);
+    if (!result.success) return;
+
+    currentState = game.getState();
+    meta.lastTurnEvent = {
+      type: 'timeout',
+      playerId: timedOutPlayerId,
+      at: Date.now(),
+      moveNumber: currentState.moveNumber
+    };
+    if (timedOutPlayerId === meta.localPlayerId) {
+      placements = [];
+      selectedTileId = null;
+      updateValidation();
+    }
+    resetTurnTimer();
+    await persistSnapshot();
+    sendSync();
+    renderAll();
+    maybeShowTimeoutToastFromMeta(meta);
+    appendLog(`Auto-pass: ${labels[timedOutPlayerId] ?? timedOutPlayerId} ran out of time.`);
+  } finally {
+    autoPassInProgress = false;
+  }
 }
 
 async function updateValidation() {
@@ -586,9 +720,11 @@ function renderModeControls() {
     languageWrapper.style.display = isJoin ? 'none' : '';
   }
   timerInput.disabled = isJoin;
+  timerEnabledToggle.disabled = isJoin;
   if (timerWrapper) {
     timerWrapper.style.display = isJoin ? 'none' : '';
   }
+  updateTimerSettingsUI();
 }
 
 function renderVisibility() {
@@ -960,7 +1096,7 @@ async function startSession() {
   setMinWordLength(minWordLength);
 
   const timerDurationSec = resolveTimerDurationSeconds();
-  const timerEnabled = timerDurationSec > 0;
+  const timerEnabled = timerEnabledToggle.checked && timerDurationSec > 0;
 
   await ensureLanguage(language);
 
@@ -974,7 +1110,7 @@ async function startSession() {
     sessionId: state.sessionId,
     minWordLength,
     timerEnabled,
-    timerDurationSec: timerEnabled ? timerDurationSec : undefined,
+    timerDurationSec,
     turnDeadline: timerEnabled ? Date.now() + timerDurationSec * 1000 : null
   };
   labels = { [localId]: me };
@@ -1100,6 +1236,8 @@ async function handleMessage(data: unknown) {
     renderAll();
     await persistSnapshot();
     appendLog('Synced state from peer.');
+    // Show "timeout auto-pass" banner when we learn about it.
+    if (meta) maybeShowTimeoutToastFromMeta(meta);
     return;
   }
 
@@ -1378,6 +1516,7 @@ async function resumeSnapshot() {
   placements = [];
   updateValidation();
   renderAll();
+  maybeShowTimeoutToastFromMeta(meta);
   appendLog('Resumed saved game.');
 }
 
