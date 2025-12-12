@@ -112,14 +112,14 @@ app.innerHTML = `
             <input id="peer-name" value="Player 2" />
           </label>
           <label class="stack" id="session-language">
-            <span class="label">Session language (solo/host)</span>
+            <span class="label">Session language</span>
             <select id="language">
               <option value="en">English</option>
               <option value="ru">Русский</option>
             </select>
           </label>
           <label class="stack">
-            <span class="label">Minimum word length (solo/host)</span>
+            <span class="label">Minimum word length</span>
             <input id="min-length" type="number" min="1" value="2" />
             <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
           </label>
