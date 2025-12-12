@@ -71,8 +71,12 @@ app.innerHTML = `
         <div class="row wrap gap">
           <span class="label">Dictionaries</span>
           <button class="ghost" id="refresh-dicts">Re-check</button>
-          <button id="download-en" class="ghost">EN pack</button>
-          <button id="download-ru" class="ghost">RU pack</button>
+          <button id="download-en" class="ghost">
+            EN pack <span id="dict-en-icon" aria-label="English dictionary status">…</span>
+          </button>
+          <button id="download-ru" class="ghost">
+            RU pack <span id="dict-ru-icon" aria-label="Russian dictionary status">…</span>
+          </button>
         </div>
       </div>
 
@@ -270,6 +274,8 @@ const answerQr = document.querySelector<HTMLImageElement>('#answer-qr')!;
 const refreshDictsBtn = document.querySelector<HTMLButtonElement>('#refresh-dicts')!;
 const downloadEnBtn = document.querySelector<HTMLButtonElement>('#download-en')!;
 const downloadRuBtn = document.querySelector<HTMLButtonElement>('#download-ru')!;
+const dictEnIcon = document.querySelector<HTMLSpanElement>('#dict-en-icon')!;
+const dictRuIcon = document.querySelector<HTMLSpanElement>('#dict-ru-icon')!;
 const requestSyncBtn = document.querySelector<HTMLButtonElement>('#request-sync')!;
 const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup')!;
 const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
@@ -297,12 +303,19 @@ renderVersion();
 applyModeUI();
 renderVisibility();
 refreshDictStatus();
+startDictionaryAutoCheck();
 checkSavedSnapshot();
 registerServiceWorker();
 
 function setupEvents() {
-  window.addEventListener('online', renderNetworkStatus);
-  window.addEventListener('offline', renderNetworkStatus);
+  window.addEventListener('online', () => {
+    renderNetworkStatus();
+    void refreshDictStatus();
+  });
+  window.addEventListener('offline', () => {
+    renderNetworkStatus();
+    void refreshDictStatus();
+  });
   appendLog('Tips: both devices on same Wi-Fi, no VPN; host creates offer, client returns answer; host applies answer.');
 
   document.querySelector('#force-reload')?.addEventListener('click', async () => {
@@ -1205,11 +1218,24 @@ async function downloadLanguage(language: Language) {
 
 async function refreshDictStatus() {
   const [en, ru] = await Promise.all([ensureDictionary('en'), ensureDictionary('ru')]);
-  const parts = [];
-  parts.push(`EN: ${en.available ? 'ready' : 'missing'}`);
-  parts.push(`RU: ${ru.available ? 'ready' : 'missing'}`);
-  dictStatus.textContent = parts.join(' • ');
+  const icon = (available: boolean) => (available ? '✅' : '❌');
+
+  // Header pill summary
+  dictStatus.textContent = `EN ${icon(en.available)} • RU ${icon(ru.available)}`;
   dictStatus.classList.toggle('danger', !en.available || !ru.available);
+
+  // Dictionary buttons
+  dictEnIcon.textContent = icon(en.available);
+  dictRuIcon.textContent = icon(ru.available);
+}
+
+function startDictionaryAutoCheck() {
+  // Keep UI indicators correct if IndexedDB is updated elsewhere
+  window.addEventListener('focus', () => void refreshDictStatus());
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void refreshDictStatus();
+  });
+  window.setInterval(() => void refreshDictStatus(), 30_000);
 }
 
 async function persistSnapshot() {
