@@ -15,6 +15,7 @@ import { allPlayersReady, maybeComputeGameStartAt } from './network/readySync';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
 import jsQR from 'jsqr';
 import { canStartInitialTurnTimer } from './core/sessionTimer';
+import { applyActionButtonsStateToDom } from './ui/actionButtonsState';
 
 declare const __APP_VERSION__: string;
 
@@ -608,6 +609,9 @@ function renderReadyOverlay() {
 
   if (!active) {
     stopReadyTicker();
+    // Important: ready ticker renders only the overlay; when the lock ends we must also
+    // refresh action button disabled state so move buttons don't get stuck inert.
+    applyActionButtonsState();
     return;
   }
 
@@ -1201,20 +1205,17 @@ function renderAll() {
 function applyActionButtonsState() {
   const state = currentState;
   const isOver = Boolean(meta?.gameOver);
-  const isMyTurn = Boolean(state && meta && state.currentPlayer === meta.localPlayerId);
   const locked = isPreGameLocked();
-  const canAct = !locked && !isOver && isMyTurn;
-
-  confirmMoveBtn.disabled = !canAct;
-  passBtn.disabled = !canAct;
-  exchangeBtn.disabled = !canAct;
-
-  // UX niceties
-  // Clearing pending placements is always safe: it only affects local UI state.
-  // Keep it available even if turn state changes (e.g. sync/reconnect) so users
-  // can always "recall" temporarily placed tiles back to their rack.
-  clearPlacementsBtn.disabled = locked || placements.length === 0;
-  mixRackBtn.disabled = locked || isOver;
+  applyActionButtonsStateToDom(
+    { confirmMoveBtn, passBtn, exchangeBtn, clearPlacementsBtn, mixRackBtn },
+    {
+      state,
+      localPlayerId: meta?.localPlayerId ?? null,
+      locked,
+      isOver,
+      placementsCount: placements.length
+    }
+  );
 }
 
 function renderTile(tile: Tile, selected = false, pending = false) {
