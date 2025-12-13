@@ -229,6 +229,15 @@ app.innerHTML = `
           </div>
         </div>
         <div id="toast" class="toast" role="status" aria-live="polite" style="display: none"></div>
+        <div id="disconnect-overlay" class="disconnect-overlay" style="display: none;">
+          <div class="disconnect-content">
+            <div class="disconnect-icon">⚡</div>
+            <h3>Connection Lost</h3>
+            <p id="disconnect-message">The connection to your opponent was interrupted.</p>
+            <p class="disconnect-hint">Scan the QR code again to reconnect and resume your game.</p>
+            <div class="disconnect-spinner"></div>
+          </div>
+        </div>
         <div id="board" class="board"></div>
       </div>
 
@@ -339,6 +348,8 @@ const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup'
 const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
 const languageWrapper = document.querySelector<HTMLElement>('#session-language')!;
 const timerWrapper = document.querySelector<HTMLElement>('#session-timer')!;
+const disconnectOverlay = document.querySelector<HTMLDivElement>('#disconnect-overlay')!;
+const disconnectMessage = document.querySelector<HTMLParagraphElement>('#disconnect-message')!;
 
 let mode: Mode = 'solo';
 let meta: SessionMeta | null = null;
@@ -360,6 +371,7 @@ let lastShownTurnEventToken: string | null = null;
 let lastShownGameOverToken: string | null = null;
 let lastAutoPassToken: string | null = null;
 let autoPassInProgress = false;
+let disconnectTimerState: { deadline: number; remaining: number } | null = null;
 
 // Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
 // by tracking tile ids and reconciling against the authoritative rack on each update.
@@ -1399,8 +1411,13 @@ function buildCallbacks(): P2PCallbacks {
       p2pStatus.textContent = 'Connected';
       p2pStatus.className = 'pill active';
       appendLog('Data channel open.');
+
+      // Hide the disconnect overlay and restore timer
+      hideDisconnectOverlay();
+
       if (meta?.isHost && currentState) {
         // If host started the session before the peer connected, arm the initial turn timer now.
+        // But if we're reconnecting (disconnectTimerState was set), don't reset - it's already restored.
         if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline) {
           resetTurnTimer();
           void persistSnapshot();
@@ -1427,6 +1444,34 @@ function buildCallbacks(): P2PCallbacks {
   };
 }
 
+function showDisconnectOverlay(message?: string) {
+  if (message) {
+    disconnectMessage.textContent = message;
+  } else {
+    disconnectMessage.textContent = 'The connection to your opponent was interrupted.';
+  }
+  disconnectOverlay.style.display = '';
+
+  // Pause the timer by saving its remaining time
+  if (meta?.timerEnabled && meta.turnDeadline) {
+    const remaining = Math.max(0, meta.turnDeadline - Date.now());
+    disconnectTimerState = { deadline: meta.turnDeadline, remaining };
+    stopTimerTicker();
+  }
+}
+
+function hideDisconnectOverlay() {
+  disconnectOverlay.style.display = 'none';
+
+  // Restore the timer with the same remaining time (effectively pausing during disconnect)
+  if (meta?.timerEnabled && disconnectTimerState && disconnectTimerState.remaining > 0) {
+    meta.turnDeadline = Date.now() + disconnectTimerState.remaining;
+    startTimerTicker();
+    void persistSnapshot();
+  }
+  disconnectTimerState = null;
+}
+
 function handleDisconnect() {
   // Guard: If connection is null, we are likely manually resetting/reconnecting,
   // so ignore callbacks from dying connections to prevent loops.
@@ -1437,9 +1482,12 @@ function handleDisconnect() {
   p2pStatus.className = 'pill danger';
   appendLog('P2P connection lost or failed.');
 
-  // If we are in the middle of a game, try to help the user reconnect.
+  // If we are in the middle of a game, show overlay and try to help the user reconnect.
   if (currentState && mode !== 'solo') {
-    showToast('Connection lost. Attempting to restore...', 'danger');
+    const roleMessage = mode === 'host'
+      ? 'Creating a new connection offer...'
+      : 'Please scan the host\'s QR code again to reconnect.';
+    showDisconnectOverlay(roleMessage);
     void triggerReconnect();
   }
 }
@@ -1469,12 +1517,10 @@ async function triggerReconnect() {
     // Small delay to ensure previous connection teardown
     await new Promise(r => setTimeout(r, 500));
     await buildHostOffer();
-    showToast('Connection lost. New offer created - ask client to scan.', 'info', 6000);
   } else if (mode === 'client') {
     appendLog('Client: Connection lost. Please re-scan host offer.');
     p2pStatus.textContent = 'Disconnected';
     p2pStatus.className = 'pill'; // Reset danger class
-    showToast('Connection lost. Please scan host offer again.', 'danger', 6000);
   }
 }
 

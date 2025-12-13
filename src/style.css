@@ -426,6 +426,121 @@ input[type="checkbox"] {
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+/* =====================================================
+   Disconnect Overlay
+   ===================================================== */
+.disconnect-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: var(--radius-lg);
+  animation: overlayFadeIn 0.3s ease-out;
+}
+
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0px);
+    -webkit-backdrop-filter: blur(0px);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+}
+
+.disconnect-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2rem 1.5rem;
+  max-width: 320px;
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 60px rgba(239, 68, 68, 0.15);
+}
+
+.disconnect-icon {
+  font-size: 3rem;
+  margin-bottom: 0.75rem;
+  animation: iconPulse 2s ease-in-out infinite;
+}
+
+@keyframes iconPulse {
+  0%, 100% { 
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% { 
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+.disconnect-content h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent-red);
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.01em;
+}
+
+.disconnect-content p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
+
+.disconnect-hint {
+  font-size: 0.85rem !important;
+  color: var(--text-muted) !important;
+  margin-top: 0.5rem !important;
+}
+
+.disconnect-spinner {
+  width: 24px;
+  height: 24px;
+  margin-top: 1rem;
+  border: 3px solid var(--border-medium);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive adjustments for disconnect overlay */
+@media (max-width: 640px) {
+  .disconnect-content {
+    padding: 1.5rem 1rem;
+    max-width: 280px;
+  }
+  
+  .disconnect-icon {
+    font-size: 2.5rem;
+  }
+  
+  .disconnect-content h3 {
+    font-size: 1.1rem;
+  }
+  
+  .disconnect-content p {
+    font-size: 0.85rem;
+  }
+}
+
 /* Buttons */
 button {
   display: inline-flex;
