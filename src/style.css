@@ -934,6 +934,57 @@ button.danger:hover {
 }
 
 /* =====================================================
+   Game stats (optional)
+   ===================================================== */
+.stats-details summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.stats-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bag-count {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.move-history {
+  padding-top: 0.75rem;
+}
+
+.history-player h4 {
+  margin: 0.75rem 0 0.25rem 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.history-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.history-list li {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.history-list li:last-child {
+  border-bottom: none;
+}
+
+/* =====================================================
    QR Code Section
    ===================================================== */
 .qr-stack {

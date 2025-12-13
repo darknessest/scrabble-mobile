@@ -33,8 +33,33 @@ export interface GameState {
   players: string[];
   language: Language;
   moveNumber: number;
+  history: GameHistoryEntry[];
   sessionId: string;
 }
+
+export type GameHistoryEntry =
+  | {
+    type: 'MOVE';
+    moveNumber: number;
+    playerId: string;
+    scoreDelta: number;
+    words: string[];
+    placedTiles: number;
+    timestamp: number;
+  }
+  | {
+    type: 'PASS';
+    moveNumber: number;
+    playerId: string;
+    timestamp: number;
+  }
+  | {
+    type: 'EXCHANGE';
+    moveNumber: number;
+    playerId: string;
+    exchangedTiles: number;
+    timestamp: number;
+  };
 
 export interface MoveResult {
   success: boolean;

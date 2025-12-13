@@ -2,6 +2,7 @@ import { buildPremiumMap } from './boardLayout';
 import { buildBag } from './tiles';
 import type {
   BoardCell,
+  GameHistoryEntry,
   GameState,
   Language,
   MoveResult,
@@ -35,6 +36,7 @@ export class ScrabbleGame {
       players,
       language,
       moveNumber: 0,
+      history: [],
       sessionId: crypto.randomUUID()
     };
     return this.state;
@@ -126,6 +128,15 @@ export class ScrabbleGame {
     state.scores[playerId] += scoreResult.score;
     state.moveNumber += 1;
     state.currentPlayer = nextPlayer(state.players, playerId);
+    recordHistory(state, {
+      type: 'MOVE',
+      moveNumber: state.moveNumber,
+      playerId,
+      scoreDelta: scoreResult.score,
+      words: scoreResult.words,
+      placedTiles: placements.length,
+      timestamp: Date.now()
+    });
 
     return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
   }
@@ -137,6 +148,12 @@ export class ScrabbleGame {
     }
     state.currentPlayer = nextPlayer(state.players, playerId);
     state.moveNumber += 1;
+    recordHistory(state, {
+      type: 'PASS',
+      moveNumber: state.moveNumber,
+      playerId,
+      timestamp: Date.now()
+    });
     return { success: true };
   }
 
@@ -168,7 +185,24 @@ export class ScrabbleGame {
     shuffleInPlace(state.bag);
     state.moveNumber += 1;
     state.currentPlayer = nextPlayer(state.players, playerId);
+    recordHistory(state, {
+      type: 'EXCHANGE',
+      moveNumber: state.moveNumber,
+      playerId,
+      exchangedTiles: removed.length,
+      timestamp: Date.now()
+    });
     return { success: true };
+  }
+}
+
+function recordHistory(state: GameState, entry: GameHistoryEntry) {
+  // Keep bounded to avoid unbounded growth for long sessions.
+  // (Easy to tweak; UI is scrollable anyway.)
+  const MAX_HISTORY = 250;
+  state.history.push(entry);
+  if (state.history.length > MAX_HISTORY) {
+    state.history.splice(0, state.history.length - MAX_HISTORY);
   }
 }
 

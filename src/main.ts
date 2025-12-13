@@ -250,6 +250,23 @@ app.innerHTML = `
         <div id="log" class="log"></div>
       </div>
     </section>
+
+    <section class="cards" id="stats-section">
+      <div class="card">
+        <div class="card-head">
+          <h3>Game stats</h3>
+          <span class="hint">Optional</span>
+        </div>
+        <details id="stats-details" class="stats-details">
+          <summary>Show</summary>
+          <div class="stats-row">
+            <span class="label">Letters left in bag</span>
+            <strong id="bag-count" class="bag-count"></strong>
+          </div>
+          <div id="move-history" class="move-history"></div>
+        </details>
+      </div>
+    </section>
   </div>
 `;
 
@@ -279,6 +296,8 @@ const wordLengthStatus = document.querySelector<HTMLSpanElement>('#word-length-s
 const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
+const bagCountEl = document.querySelector<HTMLElement>('#bag-count')!;
+const moveHistoryEl = document.querySelector<HTMLDivElement>('#move-history')!;
 const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
 const confirmMoveBtn = document.querySelector<HTMLButtonElement>('#confirm-move')!;
 const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-placements')!;
@@ -885,10 +904,48 @@ function renderScores() {
   scoresEl.innerHTML = parts.join('');
 }
 
+function renderStats() {
+  const state = currentState;
+  if (!state) {
+    bagCountEl.textContent = '';
+    moveHistoryEl.innerHTML = '<p class="hint">Start a game to see stats.</p>';
+    return;
+  }
+
+  bagCountEl.textContent = String(state.bag.length);
+
+  const byPlayer = state.players.map((id) => ({
+    id,
+    entries: state.history.filter((h) => h.playerId === id)
+  }));
+
+  const formatEntry = (entry: (typeof state.history)[number]) => {
+    if (entry.type === 'MOVE') {
+      const words = entry.words.join(', ');
+      return `#${entry.moveNumber} — ${words} (+${entry.scoreDelta})`;
+    }
+    if (entry.type === 'PASS') return `#${entry.moveNumber} — Pass`;
+    return `#${entry.moveNumber} — Exchange ${entry.exchangedTiles}`;
+  };
+
+  const blocks = byPlayer.map(({ id, entries }) => {
+    const name = labels[id] ?? id;
+    const items = entries.length
+      ? `<ol class="history-list">${entries
+          .map((e) => `<li>${formatEntry(e)}</li>`)
+          .join('')}</ol>`
+      : '<p class="hint">No moves yet.</p>';
+    return `<div class="history-player"><h4>${name}</h4>${items}</div>`;
+  });
+
+  moveHistoryEl.innerHTML = blocks.join('');
+}
+
 function renderAll() {
   renderBoard();
   renderRack();
   renderScores();
+  renderStats();
   renderTimer();
 }
 
