@@ -161,14 +161,13 @@ app.innerHTML = `
       <div class="card" id="host-handshake">
         <div class="card-head">
           <h3>Host Handshake</h3>
-          <span class="hint">Share offer QR → scan answer QR</span>
+          <span class="hint">Share offer QR → scan/paste answer (auto-apply)</span>
         </div>
         <div class="row wrap gap">
           <div class="stack flex1">
             <span class="label">Offer (share with partner)</span>
             <textarea id="offer-text" rows="3" readonly></textarea>
             <div class="row gap wrap">
-              <button id="build-offer" class="primary">Create offer</button>
               <button id="copy-offer" class="ghost">Copy</button>
             </div>
           </div>
@@ -176,7 +175,6 @@ app.innerHTML = `
             <span class="label">Answer from partner</span>
             <textarea id="answer-text" rows="3" placeholder="Scan/paste answer"></textarea>
             <div class="row gap wrap">
-              <button id="apply-answer" class="primary">Apply answer</button>
               <button id="scan-answer" class="ghost">Scan QR</button>
             </div>
           </div>
@@ -190,7 +188,7 @@ app.innerHTML = `
       <div class="card" id="client-handshake">
         <div class="card-head">
           <h3>Join Handshake</h3>
-          <span class="hint">Scan/paste host offer → show answer QR</span>
+          <span class="hint">Scan/paste host offer → answer is generated automatically</span>
         </div>
         <div class="row wrap gap">
           <div class="stack flex1">
@@ -198,7 +196,6 @@ app.innerHTML = `
             <textarea id="host-offer-input" rows="3" placeholder="Scan/paste host offer"></textarea>
             <div class="row gap wrap">
               <button id="scan-offer" class="ghost">Scan QR</button>
-              <button id="build-answer" class="primary">Build answer</button>
             </div>
           </div>
           <div class="stack flex1">
@@ -323,16 +320,13 @@ const mixRackBtn = document.querySelector<HTMLButtonElement>('#mix-rack')!;
 const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
 const exchangeBtn = document.querySelector<HTMLButtonElement>('#exchange-btn')!;
 
-const buildOfferBtn = document.querySelector<HTMLButtonElement>('#build-offer')!;
 const copyOfferBtn = document.querySelector<HTMLButtonElement>('#copy-offer')!;
 const offerText = document.querySelector<HTMLTextAreaElement>('#offer-text')!;
 const offerQr = document.querySelector<HTMLImageElement>('#offer-qr')!;
 const answerText = document.querySelector<HTMLTextAreaElement>('#answer-text')!;
-const applyAnswerBtn = document.querySelector<HTMLButtonElement>('#apply-answer')!;
 const scanAnswerBtn = document.querySelector<HTMLButtonElement>('#scan-answer')!;
 
 const hostOfferInput = document.querySelector<HTMLTextAreaElement>('#host-offer-input')!;
-const buildAnswerBtn = document.querySelector<HTMLButtonElement>('#build-answer')!;
 const scanOfferBtn = document.querySelector<HTMLButtonElement>('#scan-offer')!;
 const clientAnswer = document.querySelector<HTMLTextAreaElement>('#client-answer')!;
 const copyClientAnswerBtn = document.querySelector<HTMLButtonElement>('#copy-client-answer')!;
@@ -372,6 +366,8 @@ let lastShownGameOverToken: string | null = null;
 let lastAutoPassToken: string | null = null;
 let autoPassInProgress = false;
 let disconnectTimerState: { deadline: number; remaining: number } | null = null;
+let lastHandshakeOffer = '';
+let lastHandshakeAnswer = '';
 
 // Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
 // by tracking tile ids and reconciling against the authoritative rack on each update.
@@ -451,10 +447,7 @@ function setupEvents() {
   passBtn.addEventListener('click', () => submitPass());
   exchangeBtn.addEventListener('click', () => submitExchange());
 
-  buildOfferBtn.addEventListener('click', () => buildHostOffer());
   copyOfferBtn.addEventListener('click', () => copyToClipboard(offerText.value));
-  applyAnswerBtn.addEventListener('click', () => applyHostAnswer());
-  buildAnswerBtn.addEventListener('click', () => buildClientAnswer());
   copyClientAnswerBtn.addEventListener('click', () => copyToClipboard(clientAnswer.value));
   scanOfferBtn.addEventListener('click', () =>
     scanInto(hostOfferInput, async () => {
@@ -465,6 +458,18 @@ function setupEvents() {
     scanInto(answerText, async () => {
       await applyHostAnswer();
     })
+  );
+  hostOfferInput.addEventListener(
+    'input',
+    debounce(() => {
+      void maybeAutoBuildClientAnswer();
+    }, 350)
+  );
+  answerText.addEventListener(
+    'input',
+    debounce(() => {
+      void maybeAutoApplyHostAnswer();
+    }, 350)
   );
 
   refreshDictsBtn.addEventListener('click', async () => {
@@ -885,6 +890,49 @@ function renderModeControls() {
     timerWrapper.style.display = isJoin ? 'none' : '';
   }
   updateTimerSettingsUI();
+  // Join mode does not start a local session; it connects and then receives a sync from host.
+  startBtn.style.display = isJoin ? 'none' : '';
+}
+
+function debounce<T extends (...args: any[]) => void>(fn: T, delayMs: number): (...args: Parameters<T>) => void {
+  let t: number | null = null;
+  return (...args: Parameters<T>) => {
+    if (t != null) window.clearTimeout(t);
+    t = window.setTimeout(() => fn(...args), delayMs);
+  };
+}
+
+function looksLikeEncodedSdp(text: string): boolean {
+  if (!text) return false;
+  // Our P2P layer encodes SDP as `btoa(JSON.stringify(desc))`.
+  // Validate it decodes to an object with `type` and `sdp`.
+  try {
+    const decoded = JSON.parse(atob(text)) as any;
+    return Boolean(decoded && typeof decoded === 'object' && typeof decoded.type === 'string' && typeof decoded.sdp === 'string');
+  } catch {
+    return false;
+  }
+}
+
+async function maybeAutoBuildClientAnswer() {
+  if (mode !== 'client') return;
+  const offer = hostOfferInput.value.trim();
+  if (!offer) return;
+  if (offer === lastHandshakeOffer) return;
+  if (!looksLikeEncodedSdp(offer)) return;
+  lastHandshakeOffer = offer;
+  await buildClientAnswer();
+}
+
+async function maybeAutoApplyHostAnswer() {
+  if (mode !== 'host') return;
+  if (!hostApplyAnswer) return;
+  const answer = answerText.value.trim();
+  if (!answer) return;
+  if (answer === lastHandshakeAnswer) return;
+  if (!looksLikeEncodedSdp(answer)) return;
+  lastHandshakeAnswer = answer;
+  await applyHostAnswer();
 }
 
 function renderVisibility() {
@@ -1301,7 +1349,7 @@ function selectBlankLetter(tile: Tile): Promise<Tile | null> {
 
 async function startSession() {
   if (mode === 'client') {
-    appendLog('Join mode: paste/scan host offer and build answer.');
+    appendLog('Join mode: scan/paste host offer to generate your answer, then wait for sync.');
     return;
   }
 
@@ -1362,9 +1410,24 @@ async function buildHostOffer() {
     appendLog('Switch to Host mode to create an offer.');
     return;
   }
+  // An offer without a started host session is confusing (there is nothing to sync once connected).
+  if (!meta?.isHost || !currentState) {
+    appendLog('Start a Host session first, then share the offer QR.');
+    return;
+  }
   await ensureLanguage(languageSelect.value as Language);
 
   const callbacks = buildCallbacks();
+  // Cleanup any previous connection to avoid leaking peer connections when regenerating offers.
+  if (connection) {
+    const old = connection;
+    connection = null;
+    try {
+      old.close();
+    } catch {
+      // ignore
+    }
+  }
   const { connection: conn, offer, applyAnswer: apply } = await createHost(callbacks);
   connection = conn;
   hostApplyAnswer = apply;
@@ -1398,6 +1461,16 @@ async function buildClientAnswer() {
     return;
   }
   const callbacks = buildCallbacks();
+  // Cleanup any previous connection to avoid leaking peer connections when rebuilding an answer.
+  if (connection) {
+    const old = connection;
+    connection = null;
+    try {
+      old.close();
+    } catch {
+      // ignore
+    }
+  }
   const { connection: conn, answer } = await createClient(callbacks, offer);
   connection = conn;
   clientAnswer.value = answer;
