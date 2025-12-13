@@ -11,6 +11,7 @@ import {
 } from './dictionary/dictionaryService';
 import { createClient, createHost, type P2PCallbacks, type P2PConnection } from './network/p2p';
 import { toQrDataUrl } from './network/qr';
+import { allPlayersReady, maybeComputeGameStartAt } from './network/readySync';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
 import jsQR from 'jsqr';
 import { canStartInitialTurnTimer } from './core/sessionTimer';
@@ -32,6 +33,15 @@ interface SessionMeta {
   turnDeadline?: number | null;
   lastTurnEvent?: TurnEvent;
   gameOver?: GameOverEvent;
+  /**
+   * Pre-game sync (P2P only): both users must click "Ready".
+   *
+   * Back-compat note:
+   * - If `gameStartAt` is undefined, the session behaves as "already started" (old snapshots).
+   * - New P2P sessions set `gameStartAt` to null and will show a Ready overlay until scheduled.
+   */
+  readyState?: Record<string, boolean>;
+  gameStartAt?: number | null;
 }
 
 interface SnapshotPayload {
@@ -61,11 +71,14 @@ type ActionMessage =
   | { type: 'ACTION_PASS'; playerId: string }
   | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
   | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
+  | { type: 'PLAYER_READY'; playerId: string; ready: boolean }
   | { type: 'REQUEST_SYNC' }
   | { type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> };
 
 const BASE_PATH = import.meta.env.BASE_URL ?? '/';
 const game = new ScrabbleGame();
+const READY_GRACE_MS = 3000;
+const READY_TICK_MS = 200;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
@@ -235,6 +248,13 @@ app.innerHTML = `
             <div class="disconnect-spinner"></div>
           </div>
         </div>
+        <div id="ready-overlay" class="ready-overlay" style="display: none;" aria-hidden="true">
+          <div class="ready-content">
+            <h3>Get ready</h3>
+            <p id="ready-status" class="hint"></p>
+            <button id="ready-btn" class="primary">Ready</button>
+          </div>
+        </div>
         <div id="board" class="board"></div>
       </div>
 
@@ -344,6 +364,9 @@ const languageWrapper = document.querySelector<HTMLElement>('#session-language')
 const timerWrapper = document.querySelector<HTMLElement>('#session-timer')!;
 const disconnectOverlay = document.querySelector<HTMLDivElement>('#disconnect-overlay')!;
 const disconnectMessage = document.querySelector<HTMLParagraphElement>('#disconnect-message')!;
+const readyOverlay = document.querySelector<HTMLDivElement>('#ready-overlay')!;
+const readyStatusEl = document.querySelector<HTMLParagraphElement>('#ready-status')!;
+const readyBtn = document.querySelector<HTMLButtonElement>('#ready-btn')!;
 
 let mode: Mode = 'solo';
 let meta: SessionMeta | null = null;
@@ -368,6 +391,7 @@ let autoPassInProgress = false;
 let disconnectTimerState: { deadline: number; remaining: number } | null = null;
 let lastHandshakeOffer = '';
 let lastHandshakeAnswer = '';
+let readyTicker: number | null = null;
 
 // Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
 // by tracking tile ids and reconciling against the authoritative rack on each update.
@@ -538,6 +562,78 @@ function setupEvents() {
 
   boardEl.addEventListener('click', onBoardClick);
   rackEl.addEventListener('click', onRackClick);
+  readyBtn.addEventListener('click', () => markLocalReady());
+}
+
+function isReadyGateEnabled(m: SessionMeta | null): boolean {
+  // Only for new P2P sessions where host explicitly initializes the field.
+  return Boolean(m && m.mode !== 'solo' && m.gameStartAt !== undefined);
+}
+
+function isPreGameLocked(): boolean {
+  if (!currentState || !meta) return false;
+  if (!isReadyGateEnabled(meta)) return false;
+  // null => not scheduled yet (waiting for both users to click Ready)
+  if (meta.gameStartAt == null) return true;
+  return Date.now() < meta.gameStartAt;
+}
+
+function formatCountdownMs(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  return `${Math.max(0, s)}s`;
+}
+
+function stopReadyTicker() {
+  if (readyTicker) {
+    window.clearInterval(readyTicker);
+    readyTicker = null;
+  }
+}
+
+function startReadyTickerIfNeeded() {
+  if (readyTicker) return;
+  readyTicker = window.setInterval(() => {
+    renderReadyOverlay();
+    // When countdown completes, this will hide the overlay; stop ticking then.
+    if (!isPreGameLocked()) stopReadyTicker();
+  }, READY_TICK_MS);
+}
+
+function renderReadyOverlay() {
+  if (!readyOverlay || !readyStatusEl || !readyBtn) return;
+
+  const active = isPreGameLocked();
+  readyOverlay.style.display = active ? '' : 'none';
+  readyOverlay.setAttribute('aria-hidden', active ? 'false' : 'true');
+
+  if (!active) {
+    stopReadyTicker();
+    return;
+  }
+
+  startReadyTickerIfNeeded();
+
+  const state = currentState;
+  const m = meta;
+  if (!state || !m) return;
+
+  const ready = m.readyState ?? {};
+  const meReady = Boolean(ready[m.localPlayerId]);
+  const otherId = m.remotePlayerId;
+  const otherReady = otherId ? Boolean(ready[otherId]) : false;
+
+  readyBtn.disabled = meReady;
+  readyBtn.textContent = meReady ? 'Ready ✓' : 'Ready';
+
+  if (m.gameStartAt && Date.now() < m.gameStartAt) {
+    const remaining = m.gameStartAt - Date.now();
+    readyStatusEl.textContent = `Both ready. Starting in ${formatCountdownMs(remaining)}…`;
+    return;
+  }
+
+  const otherLabel = otherId ? (labels[otherId] ?? otherId) : 'Opponent';
+  const otherLine = otherId ? `${otherLabel}: ${otherReady ? 'Ready ✓' : 'Not ready'}` : '';
+  readyStatusEl.textContent = `You: ${meReady ? 'Ready ✓' : 'Not ready'}${otherLine ? ` • ${otherLine}` : ''}`;
 }
 
 function renderNetworkStatus() {
@@ -605,6 +701,11 @@ function stopTimerTicker() {
 
 function renderTimer() {
   if (!timerDisplay) return;
+  // During the pre-game countdown, hide the timer entirely so it doesn't show "extra" time.
+  if (meta && isReadyGateEnabled(meta) && (meta.gameStartAt == null || Date.now() < meta.gameStartAt)) {
+    timerDisplay.style.display = 'none';
+    return;
+  }
   if (!meta || !meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) {
     timerDisplay.style.display = 'none';
     return;
@@ -634,6 +735,14 @@ function resetTurnTimer() {
   }
 
   if (!meta.timerEnabled || !meta.timerDurationSec) {
+    meta.turnDeadline = null;
+    stopTimerTicker();
+    renderTimer();
+    return;
+  }
+
+  // Ready gate (new P2P sessions): do not arm the initial timer until the scheduled start time exists.
+  if (!meta.turnDeadline && isReadyGateEnabled(meta) && (meta.gameStartAt == null || Date.now() < meta.gameStartAt)) {
     meta.turnDeadline = null;
     stopTimerTicker();
     renderTimer();
@@ -1085,6 +1194,7 @@ function renderAll() {
   renderScores();
   renderStats();
   renderTimer();
+  renderReadyOverlay();
   applyActionButtonsState();
 }
 
@@ -1092,7 +1202,8 @@ function applyActionButtonsState() {
   const state = currentState;
   const isOver = Boolean(meta?.gameOver);
   const isMyTurn = Boolean(state && meta && state.currentPlayer === meta.localPlayerId);
-  const canAct = !isOver && isMyTurn;
+  const locked = isPreGameLocked();
+  const canAct = !locked && !isOver && isMyTurn;
 
   confirmMoveBtn.disabled = !canAct;
   passBtn.disabled = !canAct;
@@ -1102,8 +1213,8 @@ function applyActionButtonsState() {
   // Clearing pending placements is always safe: it only affects local UI state.
   // Keep it available even if turn state changes (e.g. sync/reconnect) so users
   // can always "recall" temporarily placed tiles back to their rack.
-  clearPlacementsBtn.disabled = placements.length === 0;
-  mixRackBtn.disabled = isOver;
+  clearPlacementsBtn.disabled = locked || placements.length === 0;
+  mixRackBtn.disabled = locked || isOver;
 }
 
 function renderTile(tile: Tile, selected = false, pending = false) {
@@ -1168,6 +1279,7 @@ function premiumClass(x: number, y: number): string {
 }
 
 function onRackClick(ev: MouseEvent) {
+  if (isPreGameLocked()) return;
   const button = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-tile]');
   if (!button) return;
   selectedTileId = button.dataset.tile ?? null;
@@ -1177,6 +1289,7 @@ function onRackClick(ev: MouseEvent) {
 function onBoardClick(ev: MouseEvent) {
   const cell = (ev.target as HTMLElement).closest<HTMLDivElement>('[data-x][data-y]');
   if (!cell || !currentState || !meta) return;
+  if (isPreGameLocked()) return;
   if (meta.gameOver) return;
   if (currentState.currentPlayer !== meta.localPlayerId) return;
   const x = Number(cell.dataset.x);
@@ -1383,7 +1496,10 @@ async function startSession() {
     timerEnabled,
     timerDurationSec,
     // In host P2P mode, start the first timer only after both users are connected.
-    turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null
+    turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null,
+    // Ready gate: only initialize for new P2P sessions (host/client).
+    readyState: mode === 'host' && remoteId ? { [localId]: false, [remoteId]: false } : undefined,
+    gameStartAt: mode === 'host' && remoteId ? null : undefined
   };
   labels = { [localId]: me };
   if (remoteId) {
@@ -1494,7 +1610,7 @@ function buildCallbacks(): P2PCallbacks {
       if (meta?.isHost && currentState) {
         // If host started the session before the peer connected, arm the initial turn timer now.
         // But if we're reconnecting (disconnectTimerState was set), don't reset - it's already restored.
-        if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline) {
+        if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline && !isPreGameLocked()) {
           resetTurnTimer();
           void persistSnapshot();
         }
@@ -1645,6 +1761,19 @@ async function handleMessage(data: unknown) {
     return;
   }
 
+  if (msg.type === 'PLAYER_READY') {
+    // Ready sync: host is authoritative, clients just send the signal.
+    if (!meta?.isHost || !currentState) return;
+    if (!isReadyGateEnabled(meta)) return;
+    if (!meta.readyState) meta.readyState = {};
+    meta.readyState[msg.playerId] = Boolean(msg.ready);
+    await maybeScheduleGameStartFromReady();
+    renderAll();
+    await persistSnapshot();
+    sendSync();
+    return;
+  }
+
   if (msg.type === 'DRAFT_PLACEMENTS') {
     // Draft placements are a visual-only preview of the current-turn player's in-progress move.
     // Ignore until we have a game state (i.e., synced).
@@ -1742,8 +1871,58 @@ async function handleMessage(data: unknown) {
   }
 }
 
+function markLocalReady() {
+  if (!meta || !currentState) return;
+  if (!isReadyGateEnabled(meta)) return;
+  if (meta.gameOver) return;
+
+  if (!meta.readyState) meta.readyState = {};
+  meta.readyState[meta.localPlayerId] = true;
+
+  renderAll();
+  void persistSnapshot();
+
+  if (meta.isHost) {
+    void maybeScheduleGameStartFromReady().then(() => {
+      renderAll();
+      void persistSnapshot();
+      sendSync();
+    });
+  } else {
+    connection?.send({ type: 'PLAYER_READY', playerId: meta.localPlayerId, ready: true });
+  }
+}
+
+async function maybeScheduleGameStartFromReady() {
+  if (!meta || !currentState) return;
+  if (!meta.isHost) return;
+  if (!isReadyGateEnabled(meta)) return;
+  // Already scheduled: do nothing.
+  if (meta.gameStartAt != null) return;
+
+  if (!allPlayersReady(currentState.players, meta.readyState)) return;
+
+  meta.gameStartAt = maybeComputeGameStartAt({
+    currentStartAt: meta.gameStartAt ?? null,
+    players: currentState.players,
+    readyState: meta.readyState,
+    now: Date.now(),
+    graceMs: READY_GRACE_MS
+  });
+  if (meta.gameStartAt == null) return;
+  if (meta.timerEnabled && meta.timerDurationSec) {
+    meta.turnDeadline = meta.gameStartAt + meta.timerDurationSec * 1000;
+    startTimerTicker();
+  }
+  showToast('Both players ready — starting…', 'info', 2000);
+}
+
 async function submitMove() {
   if (!currentState || !meta) return;
+  if (isPreGameLocked()) {
+    appendLog('Waiting for both players to be ready.');
+    return;
+  }
   if (placements.length === 0) {
     appendLog('Place tiles before confirming.');
     return;
@@ -1799,6 +1978,10 @@ async function submitMove() {
 
 async function submitPass() {
   if (!currentState || !meta) return;
+  if (isPreGameLocked()) {
+    appendLog('Waiting for both players to be ready.');
+    return;
+  }
   if (meta.isHost || meta.mode === 'solo') {
     const result = game.passTurn(meta.localPlayerId);
     if (!result.success) {
@@ -1833,6 +2016,10 @@ async function submitPass() {
 
 async function submitExchange() {
   if (!currentState || !meta) return;
+  if (isPreGameLocked()) {
+    appendLog('Waiting for both players to be ready.');
+    return;
+  }
   const tileIds =
     placements.length > 0
       ? placements.map((p) => p.tile.id)

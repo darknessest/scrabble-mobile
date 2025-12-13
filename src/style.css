@@ -443,6 +443,49 @@ input[type="checkbox"] {
   animation: overlayFadeIn 0.3s ease-out;
 }
 
+/* =====================================================
+   Ready Overlay (Pre-game sync)
+   ===================================================== */
+.ready-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 90; /* below disconnect overlay */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--radius-lg);
+  animation: overlayFadeIn 0.25s ease-out;
+}
+
+.ready-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 1.75rem 1.25rem;
+  max-width: 340px;
+  background: rgba(30, 41, 59, 0.92);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.ready-content h3 {
+  margin: 0 0 0.5rem;
+}
+
+.ready-content .hint {
+  margin: 0 0 1rem;
+}
+
+.ready-content .primary[disabled] {
+  opacity: 0.85;
+  cursor: default;
+}
+
 @keyframes overlayFadeIn {
   from {
     opacity: 0;
