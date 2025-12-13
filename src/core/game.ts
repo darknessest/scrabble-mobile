@@ -1,8 +1,9 @@
 import { buildPremiumMap } from './boardLayout';
-import { buildBag } from './tiles';
+import { buildBag, getInitialBagSize } from './tiles';
 import type {
   BoardCell,
   GameHistoryEntry,
+  GameEndReason,
   GameState,
   Language,
   MoveResult,
@@ -14,7 +15,15 @@ import type {
 export const BOARD_SIZE = 15;
 const premiumMap = buildPremiumMap();
 
-export type WordChecker = (word: string, language: Language) => Promise<boolean>;
+export type WordChecker = ((word: string, language: Language) => Promise<boolean>) & {
+  /**
+   * Optional hook to provide the full dictionary word list.
+   * If not provided, "no moves left" auto-finish won't trigger (to avoid false positives).
+   */
+  getAllWords?: (
+    language: Language
+  ) => Iterable<string> | Promise<Iterable<string> | null> | null;
+};
 
 export class ScrabbleGame {
   private state: GameState | null = null;
@@ -51,6 +60,68 @@ export class ScrabbleGame {
       throw new Error('Game not started');
     }
     return this.state;
+  }
+
+  /**
+   * Ends the game scoring: subtract remaining rack values from each player's score.
+   * Caller is responsible for ensuring this is applied only once.
+   */
+  applyEndGameScoring(): void {
+    const state = this.getState();
+    for (const playerId of state.players) {
+      const rack = state.racks[playerId] ?? [];
+      const penalty = rack.reduce((sum, t) => sum + (t.value ?? 0), 0);
+      state.scores[playerId] = (state.scores[playerId] ?? 0) - penalty;
+    }
+  }
+
+  /**
+   * Check if the game should be considered ended right now (dynamic; does not mutate state).
+   */
+  async checkGameEnd(checkWord: WordChecker): Promise<{ ended: boolean; reason?: GameEndReason }> {
+    const state = this.getState();
+
+    // Condition 1: 4 consecutive passes (P1,P2,P1,P2) => end.
+    if (checkSequentialSkips(state)) {
+      return { ended: true, reason: 'four_passes' };
+    }
+
+    // Condition 2: bag empty AND no valid moves for all players.
+    // Performance heuristic: only do the expensive scan once the bag is < 50% of initial.
+    const initialBag = getInitialBagSize(state.language);
+    const shouldRunExpensive = state.bag.length < initialBag / 2;
+    if (!shouldRunExpensive) return { ended: false };
+
+    if (state.bag.length !== 0) return { ended: false };
+
+    const allStuck = await this.checkAllPlayersHaveNoValidMoves(checkWord);
+    if (allStuck) return { ended: true, reason: 'no_moves_bag_empty' };
+    return { ended: false };
+  }
+
+  async checkAllPlayersHaveNoValidMoves(checkWord: WordChecker): Promise<boolean> {
+    const state = this.getState();
+    const words = await resolveAllWords(checkWord, state.language);
+    // If we can't access the full dictionary, we refuse to declare "no moves" to avoid false positives.
+    if (!words) return false;
+
+    const anchors = computeAnchors(state.board);
+    const boardIsEmpty = !boardHasAnyTiles(state.board);
+
+    for (const playerId of state.players) {
+      const hasAny = await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord);
+      if (hasAny) return false;
+    }
+    return true;
+  }
+
+  async hasValidMoves(playerId: string, checkWord: WordChecker): Promise<boolean> {
+    const state = this.getState();
+    const words = await resolveAllWords(checkWord, state.language);
+    if (!words) return true;
+    const anchors = computeAnchors(state.board);
+    const boardIsEmpty = !boardHasAnyTiles(state.board);
+    return await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord);
   }
 
   async placeMove(
@@ -138,6 +209,17 @@ export class ScrabbleGame {
       timestamp: Date.now()
     });
 
+    const ended = await this.checkGameEnd(checkWord);
+    if (ended.ended && ended.reason) {
+      this.applyEndGameScoring();
+      return {
+        success: true,
+        scoreDelta: scoreResult.score,
+        words: scoreResult.words,
+        gameEnded: { reason: ended.reason, finalScores: structuredClone(state.scores) }
+      };
+    }
+
     return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
   }
 
@@ -154,6 +236,13 @@ export class ScrabbleGame {
       playerId,
       timestamp: Date.now()
     });
+    if (checkSequentialSkips(state)) {
+      this.applyEndGameScoring();
+      return {
+        success: true,
+        gameEnded: { reason: 'four_passes', finalScores: structuredClone(state.scores) }
+      };
+    }
     return { success: true };
   }
 
@@ -193,6 +282,179 @@ export class ScrabbleGame {
       timestamp: Date.now()
     });
     return { success: true };
+  }
+}
+
+async function resolveAllWords(
+  checkWord: WordChecker,
+  language: Language
+): Promise<Iterable<string> | null> {
+  if (!checkWord.getAllWords) return null;
+  const words = await Promise.resolve(checkWord.getAllWords(language));
+  return words ?? null;
+}
+
+function checkSequentialSkips(state: GameState): boolean {
+  if (state.players.length !== 2) return false;
+  const last = state.history.slice(-4);
+  if (last.length < 4) return false;
+  if (!last.every((e) => e.type === 'PASS')) return false;
+
+  const p0 = state.players[0];
+  const p1 = state.players[1];
+  const ids = last.map((e) => (e as Extract<GameHistoryEntry, { type: 'PASS' }>).playerId);
+  const okA = ids[0] === p0 && ids[1] === p1 && ids[2] === p0 && ids[3] === p1;
+  const okB = ids[0] === p1 && ids[1] === p0 && ids[2] === p1 && ids[3] === p0;
+  return okA || okB;
+}
+
+type Anchor = { x: number; y: number };
+
+function computeAnchors(board: BoardCell[][]): Anchor[] {
+  // Empty board => only center is a meaningful anchor for first move.
+  if (!boardHasAnyTiles(board)) return [{ x: 7, y: 7 }];
+
+  const anchors: Anchor[] = [];
+  const seen = new Set<string>();
+  for (let y = 0; y < BOARD_SIZE; y += 1) {
+    for (let x = 0; x < BOARD_SIZE; x += 1) {
+      if (board[y][x].tile) continue;
+      const neighbors = [
+        [x + 1, y],
+        [x - 1, y],
+        [x, y + 1],
+        [x, y - 1]
+      ];
+      const touches = neighbors.some(([nx, ny]) => inBounds(nx) && inBounds(ny) && board[ny][nx].tile);
+      if (!touches) continue;
+      const key = `${x},${y}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      anchors.push({ x, y });
+    }
+  }
+  return anchors;
+}
+
+async function hasValidMovesWithWords(
+  state: GameState,
+  playerId: string,
+  anchors: Anchor[],
+  boardIsEmpty: boolean,
+  words: Iterable<string>,
+  checkWord: WordChecker
+): Promise<boolean> {
+  const rack = state.racks[playerId] ?? [];
+  if (rack.length === 0) return false;
+
+  // Precompute racks by letter (including blanks).
+  const byLetter = new Map<string, Tile[]>();
+  const blanks: Tile[] = [];
+  for (const t of rack) {
+    if (t.blank) blanks.push(t);
+    const key = t.letter;
+    const arr = byLetter.get(key) ?? [];
+    arr.push(t);
+    byLetter.set(key, arr);
+  }
+
+  for (const rawWord of words) {
+    const word = rawWord.trim().toUpperCase();
+    if (!word) continue;
+    if (word.length > BOARD_SIZE) continue;
+
+    for (const anchor of anchors) {
+      // Try both orientations for each anchor index.
+      for (const orientation of ['row', 'col'] as const) {
+        for (let idx = 0; idx < word.length; idx += 1) {
+          const startX = orientation === 'row' ? anchor.x - idx : anchor.x;
+          const startY = orientation === 'row' ? anchor.y : anchor.y - idx;
+          const endX = orientation === 'row' ? startX + word.length - 1 : startX;
+          const endY = orientation === 'row' ? startY : startY + word.length - 1;
+          if (!inBounds(startX) || !inBounds(startY) || !inBounds(endX) || !inBounds(endY)) continue;
+
+          // Collect placements: we place tiles only on empty cells; existing letters must match.
+          const usedIds = new Set<string>();
+          const usedBlankIds = new Set<string>();
+          const placements: Placement[] = [];
+          let placedAny = false;
+
+          for (let i = 0; i < word.length; i += 1) {
+            const x = orientation === 'row' ? startX + i : startX;
+            const y = orientation === 'row' ? startY : startY + i;
+            const cellTile = state.board[y][x].tile;
+            const letter = word[i];
+
+            if (cellTile) {
+              if (cellTile.letter !== letter) {
+                placedAny = false;
+                placements.length = 0;
+                break;
+              }
+              continue;
+            }
+
+            // Need to place a tile for this letter.
+            let chosen: Tile | undefined;
+            const exact = byLetter.get(letter);
+            if (exact) {
+              chosen = exact.find((t) => !usedIds.has(t.id));
+            }
+            if (!chosen) {
+              const blank = blanks.find((t) => !usedBlankIds.has(t.id));
+              if (blank) {
+                chosen = { ...blank, letter, value: 0 };
+                usedBlankIds.add(blank.id);
+              }
+            }
+            if (!chosen) {
+              placedAny = false;
+              placements.length = 0;
+              break;
+            }
+            usedIds.add(chosen.id);
+            placements.push({ x, y, tile: chosen });
+            placedAny = true;
+          }
+
+          if (!placedAny || placements.length === 0) continue;
+
+          // First move must cover center; anchors already ensure this, but keep as safety.
+          if (boardIsEmpty && !placements.some((p) => p.x === 7 && p.y === 7)) continue;
+
+          const ok = await validateMoveOnState(state, playerId, placements, checkWord);
+          if (ok) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+async function validateMoveOnState(
+  state: GameState,
+  playerId: string,
+  placements: Placement[],
+  checkWord: WordChecker
+): Promise<boolean> {
+  if (placements.length === 0) return false;
+  if (!placements.every((p) => inBounds(p.x) && inBounds(p.y))) return false;
+  if (!playerHasTiles(state.racks[playerId] ?? [], placements.map((p) => p.tile.id))) return false;
+  if (!placements.every((p) => state.board[p.y][p.x].tile === null)) return false;
+
+  const orientation = inferOrientation(state.board, placements);
+  if (!orientation) return false;
+
+  const boardIsEmpty = !boardHasAnyTiles(state.board);
+  if (boardIsEmpty && !placements.some((p) => p.x === 7 && p.y === 7)) return false;
+  if (!boardIsEmpty && !touchesExisting(state.board, placements)) return false;
+  if (!isContiguous(state.board, placements, orientation)) return false;
+
+  try {
+    const result = await computeScore(state.board, placements, orientation, state.language, checkWord);
+    return result.words.length > 0;
+  } catch {
+    return false;
   }
 }
 

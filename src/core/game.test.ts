@@ -129,6 +129,27 @@ describe('ScrabbleGame', () => {
         expect(game.getState().moveNumber).toBe(1);
     });
 
+    it('ends game after 4 consecutive passes (2 per player) and applies end-game scoring', () => {
+        game.start('en', ['p1', 'p2']);
+        const state = game.getState();
+        state.racks['p1'] = [
+            { id: 'p1a', letter: 'A', value: 1 },
+            { id: 'p1b', letter: 'B', value: 3 }
+        ];
+        state.racks['p2'] = [
+            { id: 'p2c', letter: 'C', value: 3 }
+        ];
+
+        expect(game.passTurn('p1').success).toBe(true);
+        expect(game.passTurn('p2').success).toBe(true);
+        expect(game.passTurn('p1').success).toBe(true);
+        const last = game.passTurn('p2');
+
+        expect(last.success).toBe(true);
+        expect(last.gameEnded?.reason).toBe('four_passes');
+        expect(last.gameEnded?.finalScores).toEqual({ p1: -4, p2: -3 });
+    });
+
     it('handles exchange tiles', () => {
         game.start('en', ['p1', 'p2']);
         const state = game.getState();
@@ -214,6 +235,19 @@ describe('ScrabbleGame', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Invalid word');
+    });
+
+    it('detects game end when bag is empty and no players have valid moves', async () => {
+        game.start('en', ['p1', 'p2']);
+        const state = game.getState();
+        state.bag = [];
+
+        const checker = (async () => false) as any;
+        checker.getAllWords = () => new Set<string>();
+
+        const ended = await game.checkGameEnd(checker);
+        expect(ended.ended).toBe(true);
+        expect(ended.reason).toBe('no_moves_bag_empty');
     });
 });
 

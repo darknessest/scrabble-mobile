@@ -78,6 +78,10 @@ function specsFor(language: Language): TileSpec[] {
   return language === 'en' ? ENGLISH_SET : RUSSIAN_SET;
 }
 
+export function getInitialBagSize(language: Language): number {
+  return specsFor(language).reduce((sum, spec) => sum + spec.count, 0);
+}
+
 export function buildBag(language: Language): Tile[] {
   const specs = specsFor(language);
   const tiles: Tile[] = [];

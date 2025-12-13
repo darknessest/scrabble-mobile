@@ -1,10 +1,11 @@
 import './style.css';
-import { BOARD_SIZE, ScrabbleGame } from './core/game';
-import type { GameState, Language, Placement, Tile } from './core/types';
+import { BOARD_SIZE, ScrabbleGame, type WordChecker } from './core/game';
+import type { GameEndReason, GameState, Language, Placement, Tile } from './core/types';
 import { reconcileOrder, shuffleCopy } from './ui/rackOrder';
 import {
   downloadDictionary,
   ensureDictionary,
+  getDictionaryWordSet,
   hasWord,
   setMinWordLength
 } from './dictionary/dictionaryService';
@@ -30,6 +31,7 @@ interface SessionMeta {
   timerDurationSec?: number;
   turnDeadline?: number | null;
   lastTurnEvent?: TurnEvent;
+  gameOver?: GameOverEvent;
 }
 
 interface SnapshotPayload {
@@ -45,6 +47,13 @@ interface TurnEvent {
   playerId: string;
   at: number;
   moveNumber: number;
+}
+
+interface GameOverEvent {
+  reason: GameEndReason;
+  at: number;
+  moveNumber: number;
+  finalScores: Record<string, number>;
 }
 
 type ActionMessage =
@@ -348,6 +357,7 @@ let validationNonce = 0;
 let remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null = null;
 let toastTimer: number | null = null;
 let lastShownTurnEventToken: string | null = null;
+let lastShownGameOverToken: string | null = null;
 let lastAutoPassToken: string | null = null;
 let autoPassInProgress = false;
 
@@ -636,6 +646,25 @@ function showToast(message: string, variant: 'info' | 'danger' = 'info', ms = 45
   }, ms);
 }
 
+function formatGameOverReason(reason: GameEndReason): string {
+  if (reason === 'four_passes') return 'Both players passed twice in a row.';
+  return 'No tiles left in the bag and no valid moves available.';
+}
+
+function maybeShowGameOverToastFromMeta(incoming: SessionMeta) {
+  const ev = incoming.gameOver;
+  if (!ev) return;
+  const token = `${ev.reason}:${ev.moveNumber}:${ev.at}`;
+  if (token === lastShownGameOverToken) return;
+  lastShownGameOverToken = token;
+
+  const scoresText = Object.entries(ev.finalScores)
+    .map(([id, score]) => `${labels[id] ?? id}: ${score}`)
+    .join(' • ');
+
+  showToast(`Game ended — ${formatGameOverReason(ev.reason)} Final scores: ${scoresText}`, 'info', 8000);
+}
+
 function maybeShowTimeoutToastFromMeta(incoming: SessionMeta) {
   const ev = incoming.lastTurnEvent;
   if (!ev || ev.type !== 'timeout') return;
@@ -686,9 +715,58 @@ async function maybeAutoPassOnTimeout() {
     renderAll();
     maybeShowTimeoutToastFromMeta(meta);
     appendLog(`Auto-pass: ${labels[timedOutPlayerId] ?? timedOutPlayerId} ran out of time.`);
+    // Auto-pass might end the game via 4 consecutive passes.
+    if (result.gameEnded) {
+      meta.gameOver = {
+        reason: result.gameEnded.reason,
+        at: Date.now(),
+        moveNumber: currentState.moveNumber,
+        finalScores: result.gameEnded.finalScores
+      };
+      await persistSnapshot();
+      sendSync();
+      renderAll();
+      maybeShowGameOverToastFromMeta(meta);
+      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+    } else {
+      await checkAndHandleGameEnd();
+    }
   } finally {
     autoPassInProgress = false;
   }
+}
+
+function buildWordChecker(): WordChecker {
+  const fn = ((word: string, language: Language) => hasWord(word, language)) as WordChecker;
+  fn.getAllWords = ((language: Language) => getDictionaryWordSet(language)) as WordChecker['getAllWords'];
+  return fn;
+}
+
+async function checkAndHandleGameEnd() {
+  if (!meta || !currentState) return;
+  if (meta.gameOver) return;
+  // Host (or solo) is authoritative for "game ended" decisions.
+  if (!meta.isHost && meta.mode !== 'solo') return;
+
+  await ensureLanguage(meta.language);
+
+  const ended = await game.checkGameEnd(buildWordChecker());
+  if (!ended.ended || !ended.reason) return;
+
+  // Apply final scoring once and sync.
+  game.applyEndGameScoring();
+  currentState = game.getState();
+  meta.gameOver = {
+    reason: ended.reason,
+    at: Date.now(),
+    moveNumber: currentState.moveNumber,
+    finalScores: structuredClone(currentState.scores)
+  };
+  await persistSnapshot();
+  sendSync();
+  renderAll();
+  maybeShowGameOverToastFromMeta(meta);
+  appendLog(`Game ended: ${formatGameOverReason(ended.reason)}`);
 }
 
 async function updateValidation() {
@@ -932,8 +1010,8 @@ function renderStats() {
     const name = labels[id] ?? id;
     const items = entries.length
       ? `<ol class="history-list">${entries
-          .map((e) => `<li>${formatEntry(e)}</li>`)
-          .join('')}</ol>`
+        .map((e) => `<li>${formatEntry(e)}</li>`)
+        .join('')}</ol>`
       : '<p class="hint">No moves yet.</p>';
     return `<div class="history-player"><h4>${name}</h4>${items}</div>`;
   });
@@ -947,6 +1025,22 @@ function renderAll() {
   renderScores();
   renderStats();
   renderTimer();
+  applyActionButtonsState();
+}
+
+function applyActionButtonsState() {
+  const state = currentState;
+  const isOver = Boolean(meta?.gameOver);
+  const isMyTurn = Boolean(state && meta && state.currentPlayer === meta.localPlayerId);
+  const canAct = !isOver && isMyTurn;
+
+  confirmMoveBtn.disabled = !canAct;
+  passBtn.disabled = !canAct;
+  exchangeBtn.disabled = !canAct;
+
+  // UX niceties
+  clearPlacementsBtn.disabled = !canAct || placements.length === 0;
+  mixRackBtn.disabled = isOver;
 }
 
 function renderTile(tile: Tile, selected = false, pending = false) {
@@ -1020,6 +1114,8 @@ function onRackClick(ev: MouseEvent) {
 function onBoardClick(ev: MouseEvent) {
   const cell = (ev.target as HTMLElement).closest<HTMLDivElement>('[data-x][data-y]');
   if (!cell || !currentState || !meta) return;
+  if (meta.gameOver) return;
+  if (currentState.currentPlayer !== meta.localPlayerId) return;
   const x = Number(cell.dataset.x);
   const y = Number(cell.dataset.y);
   if (currentState.board[y][x].tile) {
@@ -1420,7 +1516,10 @@ async function handleMessage(data: unknown) {
     await persistSnapshot();
     appendLog('Synced state from peer.');
     // Show "timeout auto-pass" banner when we learn about it.
-    if (meta) maybeShowTimeoutToastFromMeta(meta);
+    if (meta) {
+      maybeShowTimeoutToastFromMeta(meta);
+      maybeShowGameOverToastFromMeta(meta);
+    }
     return;
   }
 
@@ -1454,7 +1553,7 @@ async function handleMessage(data: unknown) {
     const result = await game.placeMove(
       msg.playerId,
       msg.placements,
-      (word, lang) => hasWord(word, lang)
+      buildWordChecker()
     );
     if (result.success) {
       currentState = game.getState();
@@ -1462,6 +1561,21 @@ async function handleMessage(data: unknown) {
       await persistSnapshot();
       sendSync();
       renderAll();
+      if (meta && result.gameEnded) {
+        meta.gameOver = {
+          reason: result.gameEnded.reason,
+          at: Date.now(),
+          moveNumber: currentState.moveNumber,
+          finalScores: result.gameEnded.finalScores
+        };
+        await persistSnapshot();
+        sendSync();
+        renderAll();
+        maybeShowGameOverToastFromMeta(meta);
+        appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+      } else {
+        await checkAndHandleGameEnd();
+      }
     } else {
       appendLog(result.message ?? 'Move rejected');
     }
@@ -1474,6 +1588,21 @@ async function handleMessage(data: unknown) {
       await persistSnapshot();
       sendSync();
       renderAll();
+      if (meta && result.gameEnded) {
+        meta.gameOver = {
+          reason: result.gameEnded.reason,
+          at: Date.now(),
+          moveNumber: currentState.moveNumber,
+          finalScores: result.gameEnded.finalScores
+        };
+        await persistSnapshot();
+        sendSync();
+        renderAll();
+        maybeShowGameOverToastFromMeta(meta);
+        appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+      } else {
+        await checkAndHandleGameEnd();
+      }
     }
   } else if (msg.type === 'ACTION_EXCHANGE') {
     remoteDraft = null;
@@ -1484,6 +1613,7 @@ async function handleMessage(data: unknown) {
       await persistSnapshot();
       sendSync();
       renderAll();
+      await checkAndHandleGameEnd();
     } else {
       appendLog(result.message ?? 'Exchange rejected');
     }
@@ -1502,7 +1632,7 @@ async function submitMove() {
     const result = await game.placeMove(
       meta.localPlayerId,
       placements,
-      (word, lang) => hasWord(word, lang)
+      buildWordChecker()
     );
     if (!result.success) {
       appendLog(result.message ?? 'Invalid move');
@@ -1515,6 +1645,21 @@ async function submitMove() {
     renderAll();
     await persistSnapshot();
     sendSync();
+    if (result.gameEnded) {
+      meta.gameOver = {
+        reason: result.gameEnded.reason,
+        at: Date.now(),
+        moveNumber: currentState.moveNumber,
+        finalScores: result.gameEnded.finalScores
+      };
+      await persistSnapshot();
+      sendSync();
+      renderAll();
+      maybeShowGameOverToastFromMeta(meta);
+      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+    } else {
+      await checkAndHandleGameEnd();
+    }
   } else {
     connection?.send({
       type: 'ACTION_MOVE',
@@ -1543,6 +1688,21 @@ async function submitPass() {
     await persistSnapshot();
     renderAll();
     sendSync();
+    if (result.gameEnded) {
+      meta.gameOver = {
+        reason: result.gameEnded.reason,
+        at: Date.now(),
+        moveNumber: currentState.moveNumber,
+        finalScores: result.gameEnded.finalScores
+      };
+      await persistSnapshot();
+      sendSync();
+      renderAll();
+      maybeShowGameOverToastFromMeta(meta);
+      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+    } else {
+      await checkAndHandleGameEnd();
+    }
   } else {
     connection?.send({ type: 'ACTION_PASS', playerId: meta.localPlayerId } satisfies ActionMessage);
     appendLog('Pass sent to host');
@@ -1578,6 +1738,7 @@ async function submitExchange() {
     await persistSnapshot();
     renderAll();
     sendSync();
+    await checkAndHandleGameEnd();
   } else {
     connection?.send({
       type: 'ACTION_EXCHANGE',
@@ -1709,6 +1870,7 @@ async function resumeSnapshot() {
   updateValidation();
   renderAll();
   maybeShowTimeoutToastFromMeta(meta);
+  maybeShowGameOverToastFromMeta(meta);
   appendLog('Resumed saved game.');
 
   if (mode !== 'solo') {

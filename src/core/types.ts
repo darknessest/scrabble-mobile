@@ -37,6 +37,13 @@ export interface GameState {
   sessionId: string;
 }
 
+export type GameEndReason = 'four_passes' | 'no_moves_bag_empty';
+
+export interface GameEndedInfo {
+  reason: GameEndReason;
+  finalScores: Record<string, number>;
+}
+
 export type GameHistoryEntry =
   | {
     type: 'MOVE';
@@ -66,5 +73,6 @@ export interface MoveResult {
   message?: string;
   scoreDelta?: number;
   words?: string[];
+  gameEnded?: GameEndedInfo;
 }
 

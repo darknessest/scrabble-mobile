@@ -227,6 +227,18 @@ export async function hasWord(word: string, language: Language): Promise<boolean
 }
 
 /**
+ * Returns the in-memory normalized word set for a language (or null if unavailable).
+ * Intended for advanced features (e.g. endgame "any valid move left" scans).
+ *
+ * Note: The returned Set is the internal cache. Treat it as read-only.
+ */
+export async function getDictionaryWordSet(language: Language): Promise<Set<string> | null> {
+  const status = await ensureDictionary(language);
+  if (!status.available) return null;
+  return memoryCache[language] ?? null;
+}
+
+/**
  * Get detailed information about a word (POS, plural forms, etc.)
  */
 export async function getWordInfo(word: string, language: Language): Promise<WordInfo | null> {
