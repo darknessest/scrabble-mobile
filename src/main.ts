@@ -1051,7 +1051,10 @@ function applyActionButtonsState() {
   exchangeBtn.disabled = !canAct;
 
   // UX niceties
-  clearPlacementsBtn.disabled = !canAct || placements.length === 0;
+  // Clearing pending placements is always safe: it only affects local UI state.
+  // Keep it available even if turn state changes (e.g. sync/reconnect) so users
+  // can always "recall" temporarily placed tiles back to their rack.
+  clearPlacementsBtn.disabled = placements.length === 0;
   mixRackBtn.disabled = isOver;
 }
 
