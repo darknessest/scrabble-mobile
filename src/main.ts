@@ -97,7 +97,7 @@ app.innerHTML = `
           <span id="p2p-status" class="pill">P2P: idle</span>
         </div>
         <div class="row gap wrap">
-          <button id="force-reload" class="ghost">Force Update</button>
+          <button id="force-reload" class="ghost">Update Game</button>
           <button id="toggle-setup" class="ghost">Hide setup</button>
         </div>
       </div>
