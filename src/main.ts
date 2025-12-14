@@ -1,6 +1,7 @@
 import './style.css';
 import { BOARD_SIZE, ScrabbleGame, type WordChecker } from './core/game';
 import type { GameEndReason, GameState, Language, Placement, Tile } from './core/types';
+import { getInitialBagSize } from './core/tiles';
 import { reconcileOrder, shuffleCopy } from './ui/rackOrder';
 import {
   downloadDictionary,
@@ -50,6 +51,7 @@ interface SessionMeta {
    */
   readyState?: Record<string, boolean>;
   gameStartAt?: number | null;
+  rematch?: { requestedBy: Record<string, boolean>; at: number };
 }
 
 interface SnapshotPayload {
@@ -78,6 +80,7 @@ type ActionMessage =
   | { type: 'ACTION_MOVE'; placements: Placement[]; playerId: string }
   | { type: 'ACTION_PASS'; playerId: string }
   | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
+  | { type: 'ACTION_REMATCH_REQUEST'; playerId: string; at: number }
   | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
   | { type: 'PLAYER_READY'; playerId: string; ready: boolean }
   | { type: 'REQUEST_SYNC' }
@@ -255,9 +258,23 @@ app.innerHTML = `
             <span id="timer-display" class="pill timer-pill"></span>
             <span id="word-check-status" class="pill" style="display: none"></span>
             <span id="word-length-status" class="pill" style="display: none"></span>
+            <span id="endgame-scan-status" class="pill" style="display: none"></span>
           </div>
         </div>
         <div id="toast" class="toast" role="status" aria-live="polite" style="display: none"></div>
+        <div id="gameover-banner" class="gameover-banner" style="display: none;" aria-live="polite">
+          <div class="gameover-banner-inner">
+            <div class="gameover-banner-text">
+              <strong>Game ended</strong>
+              <span id="gameover-banner-scores" class="hint"></span>
+              <span id="rematch-banner-status" class="hint"></span>
+            </div>
+            <div class="row gap wrap">
+              <button id="rematch-btn-banner" class="primary">Rematch</button>
+              <button id="show-results-btn" class="ghost">Results</button>
+            </div>
+          </div>
+        </div>
         <div id="disconnect-overlay" class="disconnect-overlay" style="display: none;">
           <div class="disconnect-content">
             <div class="disconnect-icon">⚡</div>
@@ -272,6 +289,20 @@ app.innerHTML = `
             <h3>Get ready</h3>
             <p id="ready-status" class="hint"></p>
             <button id="ready-btn" class="primary">Ready</button>
+          </div>
+        </div>
+        <div id="gameover-overlay" class="gameover-overlay" style="display: none;" aria-hidden="true">
+          <div class="gameover-content">
+            <div class="gameover-icon">🏁</div>
+            <h3>Game ended</h3>
+            <p id="gameover-reason" class="hint"></p>
+            <div id="gameover-scores" class="gameover-scores"></div>
+            <div id="gameover-stats" class="gameover-stats"></div>
+            <p id="rematch-status" class="hint" style="margin: 0.75rem 0 0;"></p>
+            <div class="row gap wrap" style="justify-content: center; margin-top: 1rem;">
+              <button id="rematch-btn-overlay" class="primary">Rematch</button>
+              <button id="view-board-btn" class="ghost">View board</button>
+            </div>
           </div>
         </div>
         <div id="board" class="board"></div>
@@ -349,6 +380,7 @@ const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')
 const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
 const wordCheckStatus = document.querySelector<HTMLSpanElement>('#word-check-status')!;
 const wordLengthStatus = document.querySelector<HTMLSpanElement>('#word-length-status')!;
+const endgameScanStatus = document.querySelector<HTMLSpanElement>('#endgame-scan-status')!;
 const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
 const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
 const logEl = document.querySelector<HTMLDivElement>('#log')!;
@@ -390,6 +422,18 @@ const disconnectMessage = document.querySelector<HTMLParagraphElement>('#disconn
 const readyOverlay = document.querySelector<HTMLDivElement>('#ready-overlay')!;
 const readyStatusEl = document.querySelector<HTMLParagraphElement>('#ready-status')!;
 const readyBtn = document.querySelector<HTMLButtonElement>('#ready-btn')!;
+const gameOverOverlay = document.querySelector<HTMLDivElement>('#gameover-overlay')!;
+const gameOverReasonEl = document.querySelector<HTMLParagraphElement>('#gameover-reason')!;
+const gameOverScoresEl = document.querySelector<HTMLDivElement>('#gameover-scores')!;
+const gameOverStatsEl = document.querySelector<HTMLDivElement>('#gameover-stats')!;
+const rematchStatusEl = document.querySelector<HTMLParagraphElement>('#rematch-status')!;
+const rematchBtnOverlay = document.querySelector<HTMLButtonElement>('#rematch-btn-overlay')!;
+const viewBoardBtn = document.querySelector<HTMLButtonElement>('#view-board-btn')!;
+const gameOverBanner = document.querySelector<HTMLDivElement>('#gameover-banner')!;
+const gameOverBannerScoresEl = document.querySelector<HTMLSpanElement>('#gameover-banner-scores')!;
+const rematchBannerStatusEl = document.querySelector<HTMLSpanElement>('#rematch-banner-status')!;
+const rematchBtnBanner = document.querySelector<HTMLButtonElement>('#rematch-btn-banner')!;
+const showResultsBtn = document.querySelector<HTMLButtonElement>('#show-results-btn')!;
 
 let mode: Mode = 'solo';
 let meta: SessionMeta | null = null;
@@ -407,14 +451,35 @@ let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
 let validationNonce = 0;
 let remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null = null;
 let toastTimer: number | null = null;
+let toastOutTimer: number | null = null;
 let lastShownTurnEventToken: string | null = null;
-let lastShownGameOverToken: string | null = null;
+let lastHandledGameOverUiToken: string | null = null;
+let gameOverOverlayDismissed = false;
 let lastAutoPassToken: string | null = null;
 let autoPassInProgress = false;
 let disconnectTimerState: { deadline: number; remaining: number } | null = null;
 let lastHandshakeOffer = '';
 let lastHandshakeAnswer = '';
 let readyTicker: number | null = null;
+
+// Endgame scanning (background worker) state
+type EndgameScanUiState = 'idle' | 'running' | 'error';
+let endgameScanUi: EndgameScanUiState = 'idle';
+let endgameScanLastToken: string | null = null;
+let endgameScanInFlight: { requestId: string; token: string } | null = null;
+let endgameWorker: Worker | null = null;
+
+if (typeof Worker !== 'undefined') {
+  try {
+    endgameWorker = new Worker(new URL('./workers/endgameScan.worker.ts', import.meta.url), { type: 'module' });
+    endgameWorker.addEventListener('message', (ev: MessageEvent) => {
+      handleEndgameWorkerMessage(ev.data as any);
+    });
+  } catch {
+    // If workers aren't available for some reason, we simply won't auto-finish on \"no moves\".
+    endgameWorker = null;
+  }
+}
 
 // Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
 // by tracking tile ids and reconciling against the authoritative rack on each update.
@@ -608,6 +673,17 @@ function setupEvents() {
   boardEl.addEventListener('click', onBoardClick);
   rackEl.addEventListener('click', onRackClick);
   readyBtn.addEventListener('click', () => markLocalReady());
+
+  viewBoardBtn.addEventListener('click', () => {
+    gameOverOverlayDismissed = true;
+    renderGameOverUi();
+  });
+  showResultsBtn.addEventListener('click', () => {
+    gameOverOverlayDismissed = false;
+    renderGameOverUi();
+  });
+  rematchBtnOverlay.addEventListener('click', () => void requestRematch());
+  rematchBtnBanner.addEventListener('click', () => void requestRematch());
 }
 
 function isReadyGateEnabled(m: SessionMeta | null): boolean {
@@ -809,15 +885,29 @@ function resetTurnTimer() {
   startTimerTicker();
 }
 
+function hideToast() {
+  if (!toastEl) return;
+  toastEl.classList.remove('is-visible');
+  toastEl.classList.add('is-hiding');
+  if (toastOutTimer) window.clearTimeout(toastOutTimer);
+  toastOutTimer = window.setTimeout(() => {
+    toastEl.style.display = 'none';
+    toastEl.classList.remove('is-hiding');
+  }, 220);
+}
+
 function showToast(message: string, variant: 'info' | 'danger' = 'info', ms = 4500) {
   if (!toastEl) return;
   toastEl.textContent = message;
   toastEl.className = `toast ${variant}`;
   toastEl.style.display = '';
+  toastEl.classList.remove('is-hiding');
+  if (toastOutTimer) window.clearTimeout(toastOutTimer);
+  // Ensure transitions run even when reusing the same element back-to-back.
+  window.requestAnimationFrame(() => toastEl.classList.add('is-visible'));
+
   if (toastTimer) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => {
-    toastEl.style.display = 'none';
-  }, ms);
+  toastTimer = window.setTimeout(hideToast, ms);
 }
 
 function formatGameOverReason(reason: GameEndReason): string {
@@ -825,18 +915,248 @@ function formatGameOverReason(reason: GameEndReason): string {
   return 'No tiles left in the bag and no valid moves available.';
 }
 
-function maybeShowGameOverToastFromMeta(incoming: SessionMeta) {
-  const ev = incoming.gameOver;
-  if (!ev) return;
-  const token = `${ev.reason}:${ev.moveNumber}:${ev.at}`;
-  if (token === lastShownGameOverToken) return;
-  lastShownGameOverToken = token;
+function stopTimerForGameOver(incoming: SessionMeta) {
+  if (!incoming.timerEnabled) return;
+  incoming.turnDeadline = null;
+  stopTimerTicker();
+  renderTimer();
+}
 
+function computeEndgameStats(state: GameState | null): {
+  moves: number;
+  passes: number;
+  exchanges: number;
+  bingos: number;
+  bestMove?: { playerId: string; scoreDelta: number; words: string[] };
+  longestWord?: { word: string; playerId: string; scoreDelta: number };
+} {
+  if (!state) return { moves: 0, passes: 0, exchanges: 0, bingos: 0 };
+  let moves = 0;
+  let passes = 0;
+  let exchanges = 0;
+  let bingos = 0;
+  let bestMove: { playerId: string; scoreDelta: number; words: string[] } | undefined;
+  let longestWord: { word: string; playerId: string; scoreDelta: number } | undefined;
+
+  for (const entry of state.history) {
+    if (entry.type === 'MOVE') {
+      moves += 1;
+      if (entry.placedTiles === 7) bingos += 1;
+      if (!bestMove || entry.scoreDelta > bestMove.scoreDelta) {
+        bestMove = { playerId: entry.playerId, scoreDelta: entry.scoreDelta, words: entry.words };
+      }
+      for (const w of entry.words) {
+        const norm = w.trim();
+        if (!norm) continue;
+        if (!longestWord || norm.length > longestWord.word.length) {
+          longestWord = { word: norm, playerId: entry.playerId, scoreDelta: entry.scoreDelta };
+        }
+      }
+    } else if (entry.type === 'PASS') {
+      passes += 1;
+    } else if (entry.type === 'EXCHANGE') {
+      exchanges += 1;
+    }
+  }
+
+  return { moves, passes, exchanges, bingos, bestMove, longestWord };
+}
+
+function renderGameOverUi() {
+  if (!meta || !meta.gameOver) {
+    gameOverOverlay.style.display = 'none';
+    gameOverOverlay.setAttribute('aria-hidden', 'true');
+    gameOverBanner.style.display = 'none';
+    return;
+  }
+
+  const ev = meta.gameOver;
   const scoresText = Object.entries(ev.finalScores)
     .map(([id, score]) => `${labels[id] ?? id}: ${score}`)
     .join(' • ');
 
-  showToast(`Game ended — ${formatGameOverReason(ev.reason)} Final scores: ${scoresText}`, 'info', 8000);
+  gameOverReasonEl.textContent = formatGameOverReason(ev.reason);
+  gameOverScoresEl.innerHTML = `<div class=\"hint\">Final scores</div><div class=\"gameover-scores-row\">${scoresText}</div>`;
+
+  const stats = computeEndgameStats(currentState);
+  const bestMoveText = stats.bestMove
+    ? `${labels[stats.bestMove.playerId] ?? stats.bestMove.playerId}: +${stats.bestMove.scoreDelta}`
+    : '—';
+  const longestWordText = stats.longestWord
+    ? `${stats.longestWord.word} (${labels[stats.longestWord.playerId] ?? stats.longestWord.playerId})`
+    : '—';
+
+  gameOverStatsEl.innerHTML = [
+    `<div class=\"gameover-stat\"><span class=\"label\">Moves</span><strong>${stats.moves}</strong></div>`,
+    `<div class=\"gameover-stat\"><span class=\"label\">Passes</span><strong>${stats.passes}</strong></div>`,
+    `<div class=\"gameover-stat\"><span class=\"label\">Exchanges</span><strong>${stats.exchanges}</strong></div>`,
+    `<div class=\"gameover-stat\"><span class=\"label\">Bingos</span><strong>${stats.bingos}</strong></div>`,
+    `<div class=\"gameover-stat\"><span class=\"label\">Best move</span><strong>${bestMoveText}</strong></div>`,
+    `<div class=\"gameover-stat\"><span class=\"label\">Longest word</span><strong>${longestWordText}</strong></div>`
+  ].join('');
+
+  gameOverBannerScoresEl.textContent = scoresText ? `— ${scoresText}` : '';
+
+  // Rematch (both-confirm for P2P, instant for solo)
+  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
+  const baseAt = meta.gameOver.at;
+  const requestedBy =
+    meta.rematch && meta.rematch.at >= baseAt ? meta.rematch.requestedBy : {};
+  const confirmed = players.filter((id) => requestedBy[id]);
+  const missing = players.filter((id) => !requestedBy[id]);
+  const meRequested = Boolean(requestedBy[meta.localPlayerId]);
+
+  rematchBtnOverlay.disabled = meRequested;
+  rematchBtnBanner.disabled = meRequested;
+
+  if (meta.mode === 'solo') {
+    rematchStatusEl.textContent = 'Start a new game with the same settings.';
+    rematchBannerStatusEl.textContent = '';
+  } else if (missing.length === 0) {
+    rematchStatusEl.textContent = 'Starting rematch…';
+    rematchBannerStatusEl.textContent = '';
+  } else if (meRequested) {
+    const missingNames = missing.map((id) => labels[id] ?? id).join(' & ');
+    rematchStatusEl.textContent = `Waiting for ${missingNames} to confirm rematch…`;
+    rematchBannerStatusEl.textContent = `(${confirmed.length}/${players.length} confirmed)`;
+  } else {
+    rematchStatusEl.textContent = 'Confirm rematch to start a new game.';
+    rematchBannerStatusEl.textContent = `(${confirmed.length}/${players.length} confirmed)`;
+  }
+
+  if (!gameOverOverlayDismissed) {
+    gameOverOverlay.style.display = '';
+    gameOverOverlay.setAttribute('aria-hidden', 'false');
+    gameOverBanner.style.display = 'none';
+  } else {
+    gameOverOverlay.style.display = 'none';
+    gameOverOverlay.setAttribute('aria-hidden', 'true');
+    gameOverBanner.style.display = '';
+  }
+}
+
+function maybeShowGameOverToastFromMeta(incoming: SessionMeta) {
+  const ev = incoming.gameOver;
+  if (!ev) {
+    gameOverOverlay.style.display = 'none';
+    gameOverBanner.style.display = 'none';
+    return;
+  }
+
+  // Reset the overlay dismiss state when a new game-over event arrives.
+  const token = `${ev.reason}:${ev.moveNumber}:${ev.at}`;
+  if (token !== lastHandledGameOverUiToken) {
+    lastHandledGameOverUiToken = token;
+    gameOverOverlayDismissed = false;
+  }
+
+  // Game-over should feel final: stop the timer locally (host + client).
+  stopTimerForGameOver(incoming);
+
+  renderGameOverUi();
+}
+
+function applyRematchRequest(playerId: string, at: number) {
+  if (!meta || !meta.gameOver) return;
+  const baseAt = meta.gameOver.at;
+  if (!meta.rematch || meta.rematch.at < baseAt) {
+    meta.rematch = { requestedBy: {}, at };
+  }
+  meta.rematch.requestedBy[playerId] = true;
+}
+
+function allPlayersRequestedRematch(): boolean {
+  if (!meta || !meta.gameOver) return false;
+  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
+  const baseAt = meta.gameOver.at;
+  const requestedBy = meta.rematch && meta.rematch.at >= baseAt ? meta.rematch.requestedBy : {};
+  return players.length > 0 && players.every((id) => requestedBy[id]);
+}
+
+async function restartForRematch() {
+  if (!meta) return;
+
+  const language = meta.language;
+  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
+  const state = game.start(language, players);
+
+  currentState = state;
+  meta.sessionId = state.sessionId;
+  meta.gameOver = undefined;
+  meta.lastTurnEvent = undefined;
+  meta.rematch = undefined;
+
+  // If ready-gate was enabled for this session, mark it as started immediately.
+  if (isReadyGateEnabled(meta) && players.length === 2) {
+    meta.readyState = { [players[0]]: true, [players[1]]: true };
+    meta.gameStartAt = Date.now();
+  }
+
+  placements = [];
+  selectedTileId = null;
+  remoteDraft = null;
+  rackOrder = [];
+  rackOrderSessionId = state.sessionId;
+
+  // Reset endgame UI and scan state.
+  lastHandledGameOverUiToken = null;
+  gameOverOverlayDismissed = false;
+  endgameScanLastToken = null;
+  endgameScanInFlight = null;
+  setEndgameScanUi('idle');
+
+  // Ensure local dictionary min-length matches the session for validation.
+  const minWordLength = meta.minWordLength ?? resolveMinWordLength();
+  setMinWordLength(minWordLength);
+
+  meta.turnDeadline = null;
+  resetTurnTimer();
+  renderAll();
+  updateValidation();
+
+  await persistSnapshot();
+  if (meta.mode !== 'solo') {
+    sendSync();
+  }
+  appendLog('Rematch started.');
+}
+
+async function requestRematch() {
+  if (!meta || !currentState) return;
+  if (!meta.gameOver) return;
+
+  // Solo: instant rematch.
+  if (meta.mode === 'solo') {
+    await restartForRematch();
+    return;
+  }
+
+  // Optimistically mark local confirmation for immediate UI feedback.
+  applyRematchRequest(meta.localPlayerId, Date.now());
+  renderGameOverUi();
+
+  if (meta.isHost) {
+    if (allPlayersRequestedRematch()) {
+      await restartForRematch();
+      return;
+    }
+    await persistSnapshot();
+    sendSync();
+    return;
+  }
+
+  if (!connection) {
+    showToast('Not connected — cannot request rematch.', 'danger');
+    return;
+  }
+
+  connection.send({
+    type: 'ACTION_REMATCH_REQUEST',
+    playerId: meta.localPlayerId,
+    at: Date.now()
+  } satisfies ActionMessage);
+  void persistSnapshot();
+  appendLog('Rematch request sent to host.');
 }
 
 function maybeShowTimeoutToastFromMeta(incoming: SessionMeta) {
@@ -922,7 +1242,7 @@ async function hasWordWithVariant(word: string, language: Language, variant?: 'f
     const minLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
     if (norm.length < minLength) return false;
     // Access the cache directly - we know it's loaded from ensureDictionaryStrict
-    const cache = await getDictionaryWordSet('ru-strict' as any);
+    const cache = await getDictionaryWordSet('ru-strict');
     return cache?.has(norm) ?? false;
   } else if (language === 'ru' && variant === 'full') {
     // Use full dictionary only (don't fall back to strict)
@@ -946,38 +1266,143 @@ function buildWordChecker(): WordChecker {
   }) as WordChecker;
   fn.getAllWords = ((language: Language) => {
     if (language === 'ru' && variant === 'strict') {
-      return getDictionaryWordSet('ru-strict' as any) as Promise<Iterable<string> | null>;
+      return getDictionaryWordSet('ru-strict') as Promise<Iterable<string> | null>;
     }
     return getDictionaryWordSet(language);
   }) as WordChecker['getAllWords'];
   return fn;
 }
 
-async function checkAndHandleGameEnd() {
+type EndgameWorkerMessage =
+  | { type: 'ENDGAME_SCAN_RESPONSE'; requestId: string; allStuck: boolean; reason?: string; error?: string };
+
+function resolveMinWordLength(): number {
+  return Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
+}
+
+function computeEndgameScanToken(): string | null {
+  if (!meta || !currentState) return null;
+  const variant = meta.russianDictionaryVariant ?? 'full';
+  const minLength = resolveMinWordLength();
+  return `${currentState.sessionId}:${currentState.moveNumber}:${meta.language}:${variant}:${minLength}`;
+}
+
+function setEndgameScanUi(state: EndgameScanUiState, message?: string) {
+  endgameScanUi = state;
+  if (state === 'idle') {
+    endgameScanStatus.style.display = 'none';
+    endgameScanStatus.textContent = '';
+    endgameScanStatus.className = 'pill';
+    return;
+  }
+
+  endgameScanStatus.className = 'pill';
+  endgameScanStatus.style.display = '';
+  if (state === 'running') {
+    endgameScanStatus.textContent = message ?? 'Checking endgame…';
+  } else {
+    endgameScanStatus.textContent = message ?? 'Endgame scan failed';
+    endgameScanStatus.classList.add('danger');
+  }
+}
+
+function renderEndgameScanStatus() {
+  if (!meta || meta.gameOver) {
+    setEndgameScanUi('idle');
+    return;
+  }
+  if (endgameScanUi === 'idle') {
+    endgameScanStatus.style.display = 'none';
+    return;
+  }
+  // Otherwise `setEndgameScanUi` already hydrated the DOM; keep visible.
+  endgameScanStatus.style.display = '';
+}
+
+function requestEndgameScanIfNeeded() {
   if (!meta || !currentState) return;
   if (meta.gameOver) return;
-  // Host (or solo) is authoritative for "game ended" decisions.
+  // Host (or solo) is authoritative for \"game ended\" decisions.
+  if (!meta.isHost && meta.mode !== 'solo') return;
+  if (!endgameWorker) return;
+
+  // Only do the expensive scan once the bag is empty and we're late enough in the game.
+  const initialBag = getInitialBagSize(currentState.language);
+  const shouldRunExpensive = currentState.bag.length < initialBag / 2;
+  if (!shouldRunExpensive) return;
+  if (currentState.bag.length !== 0) return;
+
+  const token = computeEndgameScanToken();
+  if (!token) return;
+  if (endgameScanInFlight?.token === token) return;
+  if (endgameScanLastToken === token) return;
+
+  const requestId = crypto.randomUUID();
+  endgameScanInFlight = { requestId, token };
+  setEndgameScanUi('running');
+
+  endgameWorker.postMessage({
+    type: 'ENDGAME_SCAN_REQUEST',
+    requestId,
+    state: currentState,
+    language: meta.language,
+    russianVariant: meta.russianDictionaryVariant,
+    minLength: resolveMinWordLength()
+  });
+}
+
+function handleEndgameWorkerMessage(msg: EndgameWorkerMessage) {
+  if (!msg || msg.type !== 'ENDGAME_SCAN_RESPONSE') return;
+  if (!endgameScanInFlight) return;
+  if (msg.requestId !== endgameScanInFlight.requestId) return;
+
+  const token = endgameScanInFlight.token;
+  endgameScanInFlight = null;
+  endgameScanLastToken = token;
+
+  // Ignore if state has changed since we requested the scan.
+  const currentToken = computeEndgameScanToken();
+  if (!currentToken || currentToken !== token) {
+    setEndgameScanUi('idle');
+    return;
+  }
+
+  if (msg.reason === 'error') {
+    setEndgameScanUi('error', 'Endgame scan error');
+    return;
+  }
+
+  if (!msg.allStuck) {
+    setEndgameScanUi('idle');
+    return;
+  }
+
+  // All players stuck: finish the game (authoritatively).
+  if (!meta || !currentState) return;
+  if (meta.gameOver) return;
   if (!meta.isHost && meta.mode !== 'solo') return;
 
-  await ensureLanguage(meta.language);
-
-  const ended = await game.checkGameEnd(buildWordChecker());
-  if (!ended.ended || !ended.reason) return;
-
-  // Apply final scoring once and sync.
   game.applyEndGameScoring();
   currentState = game.getState();
   meta.gameOver = {
-    reason: ended.reason,
+    reason: 'no_moves_bag_empty',
     at: Date.now(),
     moveNumber: currentState.moveNumber,
     finalScores: structuredClone(currentState.scores)
   };
-  await persistSnapshot();
-  sendSync();
-  renderAll();
-  maybeShowGameOverToastFromMeta(meta);
-  appendLog(`Game ended: ${formatGameOverReason(ended.reason)}`);
+
+  setEndgameScanUi('idle');
+  void persistSnapshot().then(() => {
+    sendSync();
+    renderAll();
+    maybeShowGameOverToastFromMeta(meta!);
+    appendLog(`Game ended: ${formatGameOverReason('no_moves_bag_empty')}`);
+  });
+}
+
+async function checkAndHandleGameEnd() {
+  // Non-blocking: the worker decides and will set meta.gameOver if appropriate.
+  requestEndgameScanIfNeeded();
 }
 
 async function updateValidation() {
@@ -1301,6 +1726,8 @@ function renderAll() {
   renderScores();
   renderStats();
   renderTimer();
+  renderEndgameScanStatus();
+  renderGameOverUi();
   renderReadyOverlay();
   applyActionButtonsState();
 }
@@ -1919,6 +2346,20 @@ async function handleMessage(data: unknown) {
 
   if (!meta?.isHost) {
     appendLog('Received action but not host; ignoring.');
+    return;
+  }
+
+  if (msg.type === 'ACTION_REMATCH_REQUEST') {
+    // Host is authoritative for rematches.
+    if (!meta.gameOver) return;
+    applyRematchRequest(msg.playerId, msg.at);
+    renderAll();
+    if (allPlayersRequestedRematch()) {
+      await restartForRematch();
+      return;
+    }
+    await persistSnapshot();
+    sendSync();
     return;
   }
 

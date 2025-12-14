@@ -404,7 +404,7 @@ input[type="checkbox"] {
   position: fixed;
   top: 12px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(-8px);
   z-index: 5000;
   max-width: min(560px, calc(100vw - 2rem));
   padding: 0.65rem 1rem;
@@ -415,6 +415,22 @@ input[type="checkbox"] {
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  opacity: 0;
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out;
+  pointer-events: none;
+}
+
+.toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+.toast.is-hiding {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
 }
 
 .toast.info {
@@ -484,6 +500,131 @@ input[type="checkbox"] {
 .ready-content .primary[disabled] {
   opacity: 0.85;
   cursor: default;
+}
+
+/* =====================================================
+   Game Over Overlay + Banner
+   ===================================================== */
+.gameover-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 95; /* above ready overlay, below disconnect overlay */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--radius-lg);
+  animation: overlayFadeIn 0.25s ease-out;
+}
+
+.gameover-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 1.75rem 1.25rem;
+  max-width: 420px;
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.gameover-icon {
+  font-size: 2.75rem;
+  margin-bottom: 0.6rem;
+  opacity: 0.95;
+}
+
+.gameover-content h3 {
+  margin: 0 0 0.35rem;
+}
+
+.gameover-scores {
+  width: 100%;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-medium);
+}
+
+.gameover-scores-row {
+  margin-top: 0.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.gameover-stats {
+  width: 100%;
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 0.75rem;
+}
+
+.gameover-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.gameover-banner {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 80; /* below overlays */
+  pointer-events: none; /* only inner content is clickable */
+}
+
+.gameover-banner-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-lg);
+  background: rgba(30, 41, 59, 0.92);
+  border: 1px solid var(--border-medium);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: overlayFadeIn 0.2s ease-out;
+}
+
+.gameover-banner-text {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.gameover-banner-text .hint {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .gameover-stats {
+    grid-template-columns: 1fr;
+  }
+  .gameover-banner-inner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .gameover-banner-text {
+    justify-content: center;
+  }
 }
 
 @keyframes overlayFadeIn {

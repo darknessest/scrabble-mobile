@@ -75,6 +75,13 @@ export function setMinWordLength(length: number) {
   minLength = Math.max(1, Math.floor(length));
 }
 
+export type DictionaryKey = Language | 'ru-strict';
+
+async function ensureDictionaryByKey(key: DictionaryKey): Promise<DictionaryStatus> {
+  if (key === 'ru-strict') return await ensureDictionaryStrict();
+  return await ensureDictionary(key);
+}
+
 export async function ensureDictionary(language: Language): Promise<DictionaryStatus> {
   if (memoryCache[language]) {
     return { language, available: true, source: 'memory', words: memoryCache[language]!.size };
@@ -311,8 +318,8 @@ export async function hasWord(word: string, language: Language): Promise<boolean
  *
  * Note: The returned Set is the internal cache. Treat it as read-only.
  */
-export async function getDictionaryWordSet(language: Language): Promise<Set<string> | null> {
-  const status = await ensureDictionary(language);
+export async function getDictionaryWordSet(language: DictionaryKey): Promise<Set<string> | null> {
+  const status = await ensureDictionaryByKey(language);
   if (!status.available) return null;
   return memoryCache[language] ?? null;
 }
