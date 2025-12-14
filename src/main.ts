@@ -283,21 +283,6 @@ app.innerHTML = `
           <span id="rack-owner" class="hint"></span>
         </div>
         <div id="rack" class="rack"></div>
-        <details class="coord-place">
-          <summary>Place by coordinates</summary>
-          <div class="row gap wrap">
-            <label class="stack">
-              <span class="label">X</span>
-              <input id="place-x" type="number" min="0" max="14" value="7" />
-            </label>
-            <label class="stack">
-              <span class="label">Y</span>
-              <input id="place-y" type="number" min="0" max="14" value="7" />
-            </label>
-            <button id="place-at" class="ghost" title="Place selected rack tile at X,Y">Place</button>
-          </div>
-          <p class="hint">Optional accessibility helper: select a rack tile, then place it at coordinates.</p>
-        </details>
         <div class="row wrap gap">
           <button id="confirm-move" class="primary">Confirm move</button>
           <button id="clear-placements" class="ghost">Clear placements</button>
@@ -375,9 +360,6 @@ const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-pla
 const mixRackBtn = document.querySelector<HTMLButtonElement>('#mix-rack')!;
 const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
 const exchangeBtn = document.querySelector<HTMLButtonElement>('#exchange-btn')!;
-const placeXInput = document.querySelector<HTMLInputElement>('#place-x')!;
-const placeYInput = document.querySelector<HTMLInputElement>('#place-y')!;
-const placeAtBtn = document.querySelector<HTMLButtonElement>('#place-at')!;
 
 const copyOfferBtn = document.querySelector<HTMLButtonElement>('#copy-offer')!;
 const offerText = document.querySelector<HTMLTextAreaElement>('#offer-text')!;
@@ -506,17 +488,6 @@ function setupEvents() {
   });
 
   confirmMoveBtn.addEventListener('click', () => submitMove());
-  placeAtBtn.addEventListener('click', () => {
-    if (!currentState || !meta) return;
-    if (isPreGameLocked()) return;
-    if (meta.gameOver) return;
-    if (currentState.currentPlayer !== meta.localPlayerId) return;
-    const x = clampInt(Number(placeXInput.value), 0, BOARD_SIZE - 1);
-    const y = clampInt(Number(placeYInput.value), 0, BOARD_SIZE - 1);
-    placeXInput.value = String(x);
-    placeYInput.value = String(y);
-    placeSelectedTileAt(x, y);
-  });
   clearPlacementsBtn.addEventListener('click', () => {
     placements = [];
     selectedTileId = null;
@@ -1193,12 +1164,7 @@ function renderBoard() {
   }
 
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
-  const lastWordBox = computeLastWordBox(state);
-  const overlay = lastWordBox
-    ? `<div class="last-word-box" role="img" aria-label="Last move highlight"
-        style="grid-column:${lastWordBox.xStart + 1} / ${lastWordBox.xEnd + 2}; grid-row:${lastWordBox.yStart + 1} / ${lastWordBox.yEnd + 2};">
-      </div>`
-    : '';
+  const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
   const ghostPlacements =
     remoteDraft &&
       remoteDraft.moveNumber === state.moveNumber &&
@@ -1217,6 +1183,7 @@ function renderBoard() {
       const premium = premiumClass(x, y);
       const isNew = placementKeys.has(`${x},${y}`);
       const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
+      const isLastMove = !isNew && lastMoveKeys.has(`${x},${y}`);
       const validationClass =
         isNew && validationStatus === 'valid'
           ? 'valid'
@@ -1230,54 +1197,24 @@ function renderBoard() {
         premium,
         isNew ? 'pending' : '',
         isGhost ? 'remote-draft' : '',
+        isLastMove ? 'last-move' : '',
         validationClass
       ]
         .filter(Boolean)
         .join(' ');
-      const ariaLabel = `Cell ${x},${y}`;
+      const lastMoveA11y = isLastMove && tile ? ' role="img" aria-label="Last placed tile"' : '';
       cells.push(
-        `<div class="${classes}" role="button" tabindex="0" aria-label="${ariaLabel}" data-x="${x}" data-y="${y}">
+        `<div class="${classes}" data-x="${x}" data-y="${y}"${lastMoveA11y}>
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
         </div>`
       );
     }
     rows.push(`<div class="row">${cells.join('')}</div>`);
   }
-  boardEl.innerHTML = overlay + rows.join('');
+  boardEl.innerHTML = rows.join('');
 
   turnIndicator.textContent = labels[state.currentPlayer] ?? state.currentPlayer;
   turnIndicator.classList.toggle('active', meta?.localPlayerId === state.currentPlayer);
-}
-
-function computeLastWordBox(state: GameState): { xStart: number; yStart: number; xEnd: number; yEnd: number } | null {
-  const last = state.lastMove;
-  if (!last || !last.placed.length) return null;
-
-  const xs = last.placed.map((p) => p.x);
-  const ys = last.placed.map((p) => p.y);
-  const uniqX = new Set(xs).size;
-  const uniqY = new Set(ys).size;
-
-  // Moves are always aligned; if we can't infer, don't render a box.
-  const isHorizontal = uniqY === 1;
-  const isVertical = uniqX === 1;
-  if (!isHorizontal && !isVertical) return null;
-
-  if (isHorizontal) {
-    const y = ys[0]!;
-    let xStart = Math.min(...xs);
-    let xEnd = Math.max(...xs);
-    while (xStart > 0 && state.board[y]?.[xStart - 1]?.tile) xStart -= 1;
-    while (xEnd < BOARD_SIZE - 1 && state.board[y]?.[xEnd + 1]?.tile) xEnd += 1;
-    return { xStart, yStart: y, xEnd, yEnd: y };
-  }
-
-  const x = xs[0]!;
-  let yStart = Math.min(...ys);
-  let yEnd = Math.max(...ys);
-  while (yStart > 0 && state.board[yStart - 1]?.[x]?.tile) yStart -= 1;
-  while (yEnd < BOARD_SIZE - 1 && state.board[yEnd + 1]?.[x]?.tile) yEnd += 1;
-  return { xStart: x, yStart, xEnd: x, yEnd };
 }
 
 function renderRack() {
@@ -1522,11 +1459,6 @@ function placeSelectedTileAt(x: number, y: number) {
   renderBoard();
   renderRack();
   updateValidation();
-}
-
-function clampInt(v: number, min: number, max: number): number {
-  if (!Number.isFinite(v)) return min;
-  return Math.min(max, Math.max(min, Math.floor(v)));
 }
 
 function takeAvailableTile(tileId: string): Tile | null {
