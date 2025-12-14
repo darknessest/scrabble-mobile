@@ -4,7 +4,9 @@ import type { GameEndReason, GameState, Language, Placement, Tile } from './core
 import { reconcileOrder, shuffleCopy } from './ui/rackOrder';
 import {
   downloadDictionary,
+  downloadDictionaryStrict,
   ensureDictionary,
+  ensureDictionaryStrict,
   getDictionaryWordSet,
   hasWord,
   setMinWordLength
@@ -113,6 +115,9 @@ app.innerHTML = `
           </button>
           <button id="download-ru" class="ghost">
             RU pack <span id="dict-ru-icon" aria-label="Russian dictionary status">…</span>
+          </button>
+          <button id="download-ru-strict" class="ghost">
+            RU strict <span id="dict-ru-strict-icon" aria-label="Russian strict dictionary status">…</span>
           </button>
         </div>
       </div>
@@ -356,8 +361,10 @@ const answerQr = document.querySelector<HTMLImageElement>('#answer-qr')!;
 const refreshDictsBtn = document.querySelector<HTMLButtonElement>('#refresh-dicts')!;
 const downloadEnBtn = document.querySelector<HTMLButtonElement>('#download-en')!;
 const downloadRuBtn = document.querySelector<HTMLButtonElement>('#download-ru')!;
+const downloadRuStrictBtn = document.querySelector<HTMLButtonElement>('#download-ru-strict')!;
 const dictEnIcon = document.querySelector<HTMLSpanElement>('#dict-en-icon')!;
 const dictRuIcon = document.querySelector<HTMLSpanElement>('#dict-ru-icon')!;
+const dictRuStrictIcon = document.querySelector<HTMLSpanElement>('#dict-ru-strict-icon')!;
 const requestSyncBtn = document.querySelector<HTMLButtonElement>('#request-sync')!;
 const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup')!;
 const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
@@ -501,12 +508,14 @@ function setupEvents() {
     // Give immediate visual feedback so status never looks "missing"
     dictEnIcon.textContent = '⏳';
     dictRuIcon.textContent = '⏳';
+    dictRuStrictIcon.textContent = '⏳';
     dictStatus.textContent = 'Dictionaries: checking...';
     try {
       await refreshDictStatus();
     } catch (err) {
       dictEnIcon.textContent = '❌';
       dictRuIcon.textContent = '❌';
+      dictRuStrictIcon.textContent = '❌';
       dictStatus.textContent = 'Dictionaries: check failed';
       dictStatus.classList.add('danger');
       appendLog(`Dictionary status check failed: ${String(err)}`);
@@ -514,6 +523,15 @@ function setupEvents() {
   });
   downloadEnBtn.addEventListener('click', () => downloadLanguage('en'));
   downloadRuBtn.addEventListener('click', () => downloadLanguage('ru'));
+  downloadRuStrictBtn.addEventListener('click', async () => {
+    const result = await downloadDictionaryStrict();
+    if (result.available) {
+      appendLog(`Downloaded RU strict dictionary (${result.words ?? '?'} words)`);
+    } else {
+      appendLog(`Failed to download RU strict dictionary`);
+    }
+    await refreshDictStatus();
+  });
   requestSyncBtn.addEventListener('click', () => {
     connection?.send({ type: 'REQUEST_SYNC' });
     appendLog('Requested sync from peer');
@@ -2124,16 +2142,22 @@ async function downloadLanguage(language: Language) {
 }
 
 async function refreshDictStatus() {
-  const [en, ru] = await Promise.all([ensureDictionary('en'), ensureDictionary('ru')]);
+  const [en, ru, ruStrict] = await Promise.all([
+    ensureDictionary('en'),
+    ensureDictionary('ru'),
+    ensureDictionaryStrict()
+  ]);
   const icon = (available: boolean) => (available ? '✅' : '❌');
 
-  // Header pill summary
-  dictStatus.textContent = `EN ${icon(en.available)} • RU ${icon(ru.available)}`;
-  dictStatus.classList.toggle('danger', !en.available || !ru.available);
+  // Header pill summary (show RU as available if either version is available)
+  const ruAvailable = ru.available || ruStrict.available;
+  dictStatus.textContent = `EN ${icon(en.available)} • RU ${icon(ruAvailable)}`;
+  dictStatus.classList.toggle('danger', !en.available || !ruAvailable);
 
   // Dictionary buttons
   dictEnIcon.textContent = icon(en.available);
   dictRuIcon.textContent = icon(ru.available);
+  dictRuStrictIcon.textContent = icon(ruStrict.available);
 }
 
 function startDictionaryAutoCheck() {

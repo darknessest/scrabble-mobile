@@ -45,6 +45,10 @@ const FILE_MAP: Record<Language, string> = {
   ru: `${ASSETS_BASE}/ru.json`
 };
 
+// Strict Russian dictionary (nominative+plural only for nouns, base forms for others)
+const RU_STRICT_COMPRESSED = `${ASSETS_BASE}/ru-strict.json.gz`;
+const RU_STRICT_FILE = `${ASSETS_BASE}/ru-strict.json`;
+
 // Legacy fallback: local bundled files
 const LEGACY_FILE_MAP: Record<Language, string> = {
   en: `${BASE}dicts/en-basic.txt`,
@@ -150,6 +154,59 @@ async function fetchCompressedDictionary(url: string): Promise<DictionaryEntry[]
   return null;
 }
 
+/**
+ * Download strict Russian dictionary (nominative+plural only for nouns, base forms for others)
+ */
+export async function downloadDictionaryStrict(): Promise<DictionaryStatus> {
+  // Try sources in order: compressed -> uncompressed
+  let data: DictionaryData | null = null;
+  data = await fetchCompressedDictionary(RU_STRICT_COMPRESSED);
+
+  // Fall back to uncompressed JSON
+  if (!data) {
+    try {
+      const jsonRes = await fetch(RU_STRICT_FILE);
+      if (jsonRes.ok) {
+        const json = await jsonRes.json();
+        if (Array.isArray(json)) {
+          data = json as DictionaryEntry[];
+        }
+      }
+    } catch {
+      // Continue to fallback
+    }
+  }
+
+  if (!data) {
+    return { language: 'ru', available: false };
+  }
+
+  // Process and cache
+  if (Array.isArray(data)) {
+    const entries = data as DictionaryEntry[];
+    const wordSet = new Set<string>();
+    const entryMap = new Map<string, DictionaryEntry>();
+
+    for (const entry of entries) {
+      const word = normalize(entry.word);
+      wordSet.add(word);
+      entryMap.set(word, entry);
+
+      if (entry.plural) wordSet.add(normalize(entry.plural));
+      if (entry.base) wordSet.add(normalize(entry.base));
+      if (entry.forms) {
+        entry.forms.forEach(form => wordSet.add(normalize(form)));
+      }
+    }
+
+    memoryCache['ru-strict'] = wordSet;
+    entryCache['ru-strict'] = entryMap;
+  }
+
+  await saveDictionary('ru-strict', data);
+  return { language: 'ru', available: true, source: 'fetched', words: memoryCache['ru-strict']!.size };
+}
+
 export async function downloadDictionary(language: Language): Promise<DictionaryStatus> {
   // Try sources in order: compressed -> uncompressed -> legacy -> remote
   const compressedUrl = COMPRESSED_FILE_MAP[language];
@@ -220,10 +277,31 @@ export async function downloadDictionary(language: Language): Promise<Dictionary
 
 export async function hasWord(word: string, language: Language): Promise<boolean> {
   const status = await ensureDictionary(language);
-  if (!status.available || !memoryCache[language]) return false;
   const norm = normalize(word);
   if (norm.length < minLength) return false;
-  return memoryCache[language]!.has(norm);
+  
+  if (!status.available) {
+    // For Russian, check strict version as fallback
+    if (language === 'ru') {
+      const strictStatus = await ensureDictionaryStrict();
+      if (strictStatus.available && memoryCache['ru-strict']) {
+        return memoryCache['ru-strict'].has(norm);
+      }
+    }
+    return false;
+  }
+  
+  // Check primary dictionary
+  if (memoryCache[language]?.has(norm)) {
+    return true;
+  }
+  
+  // For Russian, also check strict version as fallback
+  if (language === 'ru' && memoryCache['ru-strict']?.has(norm)) {
+    return true;
+  }
+  
+  return false;
 }
 
 /**
@@ -272,6 +350,47 @@ export function clearMemoryCache() {
     delete memoryCache[lang];
     delete entryCache[lang];
   });
+  // Also clear strict version
+  delete memoryCache['ru-strict'];
+  delete entryCache['ru-strict'];
+}
+
+/**
+ * Check if strict Russian dictionary is available
+ */
+export async function ensureDictionaryStrict(): Promise<DictionaryStatus> {
+  if (memoryCache['ru-strict']) {
+    return { language: 'ru', available: true, source: 'memory', words: memoryCache['ru-strict']!.size };
+  }
+
+  const stored = await loadDictionary('ru-strict');
+  if (stored) {
+    if (Array.isArray(stored)) {
+      const entries = stored as DictionaryEntry[];
+      const wordSet = new Set<string>();
+      const entryMap = new Map<string, DictionaryEntry>();
+
+      for (const entry of entries) {
+        const word = normalize(entry.word);
+        wordSet.add(word);
+        entryMap.set(word, entry);
+
+        if (entry.plural) wordSet.add(normalize(entry.plural));
+        if (entry.base) wordSet.add(normalize(entry.base));
+        if (entry.forms) {
+          entry.forms.forEach(form => wordSet.add(normalize(form)));
+        }
+      }
+
+      memoryCache['ru-strict'] = wordSet;
+      entryCache['ru-strict'] = entryMap;
+    } else {
+      memoryCache['ru-strict'] = toSet(stored as string);
+    }
+    return { language: 'ru', available: true, source: 'indexeddb', words: memoryCache['ru-strict']!.size };
+  }
+
+  return { language: 'ru', available: false };
 }
 
 function toSet(data: string) {

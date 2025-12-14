@@ -17,6 +17,8 @@ The dictionary processing pipeline consists of two scripts:
 
 ### Russian
 - **OpenRussian** (CC BY-SA) - Comprehensive Russian dictionary with morphological data
+  - **Note:** There is no official public Russian Scrabble dictionary. OpenRussian is a general dictionary that requires filtering to remove proper nouns and abbreviations.
+  - See `RUSSIAN_SCRABBLE_RESEARCH.md` for detailed research on Russian Scrabble rules and dictionary availability.
 
 ## Usage
 
@@ -45,8 +47,53 @@ node scripts/parse-dicts.js
 
 This will:
 - Parse SOWPODS and create structured English dictionary
-- Parse OpenRussian CSV files and create structured Russian dictionary
-- Output JSON files to `public/dicts/en.json` and `public/dicts/ru.json`
+- Parse OpenRussian CSV files and create structured Russian dictionaries
+- Filter out words that don't conform to Scrabble rules (proper nouns, abbreviations, etc.)
+- Output JSON files:
+  - `public/dicts/en.json` - English dictionary
+  - `public/dicts/ru.json` - Russian dictionary (full version with all inflected forms)
+  - `public/dicts/ru-strict.json` - Russian dictionary (strict version: nouns nominative+plural only, others base forms only)
+
+### Scrabble Word Filtering Rules
+
+The parsing script applies Scrabble rule validation to ensure only valid words are included:
+
+**Allowed:**
+- Standard dictionary words
+- Inflected forms (plurals, verb conjugations, case declensions)
+- Foreign words that have been adopted into the language
+- Abbreviations that have become standard words (e.g., "laser", "scuba", "radar")
+
+**Filtered Out:**
+- Proper nouns (names, places, countries, cities)
+- Abbreviations and acronyms (unless they've become standard words)
+- Words shorter than 2 letters or longer than 15 letters
+- Words with non-letter characters
+
+**English Dictionary (SOWPODS):**
+- SOWPODS is already curated for Scrabble, so most words are valid
+- Additional filtering removes any proper nouns or abbreviations that may have slipped through
+- All inflected forms (plurals, verb tenses) are allowed as per Scrabble rules
+
+**Russian Dictionary (OpenRussian):**
+
+Two versions are generated:
+
+1. **`ru.json` (Full Version):**
+   - **Important:** There is no official public Russian Scrabble dictionary. OpenRussian is a general dictionary that requires filtering.
+   - Filters out proper nouns (common Russian names, city names, country names)
+   - Filters out abbreviations (unless they've become standard words)
+   - **Word Forms:** All valid inflected forms (cases, conjugations) are included. This is the most comprehensive version.
+
+2. **`ru-strict.json` (Strict Version):**
+   - Same filtering as full version (proper nouns, abbreviations)
+   - **Nouns:** Only nominative singular form + plural nominative form (no other cases)
+   - **Verbs:** Only infinitive form (no conjugations)
+   - **Adjectives:** Only nominative singular masculine form (no declensions)
+   - **Others:** Only base/initial forms (no inflections)
+   - This aligns with the "nominative singular form" suggestion found in research
+
+See `RUSSIAN_SCRABBLE_RESEARCH.md` for detailed information about Russian Scrabble rules and dictionary availability.
 
 ## Output Format
 

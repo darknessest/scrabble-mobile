@@ -17,7 +17,14 @@ The Scrabble game uses structured dictionaries with part-of-speech information, 
 ### Dictionary Sources
 
 - **English**: SOWPODS word list (public domain, ~267k words)
+  - Already curated for Scrabble, but additional filtering removes proper nouns and abbreviations
 - **Russian**: OpenRussian dictionary (CC BY-SA, ~58k words)
+  - **Important:** There is no official public Russian Scrabble dictionary available. OpenRussian is a general dictionary that requires filtering.
+  - Two versions are generated:
+    - **`ru.json`**: Full version with all inflected forms (cases, conjugations, declensions)
+    - **`ru-strict.json`**: Strict version with nouns in nominative singular+plural only, other POS in base forms only
+  - Both versions filter out proper nouns, abbreviations, and other disallowed words
+  - See `scripts/RUSSIAN_SCRABBLE_RESEARCH.md` for detailed research on Russian Scrabble rules
 
 ### Storage
 
@@ -131,6 +138,23 @@ Example:
   "plural": "CATS"
 }
 ```
+
+## Scrabble Word Rules
+
+The dictionaries are filtered according to official Scrabble rules:
+
+**Allowed:**
+- Standard dictionary words (2-15 letters)
+- Inflected forms (plurals, verb conjugations, case declensions)
+- Foreign words adopted into the language
+- Abbreviations that have become standard words (e.g., "laser", "scuba")
+
+**Filtered Out:**
+- Proper nouns (names, places, countries, cities)
+- Abbreviations and acronyms (unless they've become standard words)
+- Words with invalid length or characters
+
+See `scripts/README.md` for detailed filtering rules and implementation.
 
 ## Troubleshooting
 
