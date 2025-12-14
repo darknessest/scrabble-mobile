@@ -57,7 +57,7 @@ Local Scripts → Process → Compress → Push to assets branch → CDN → Cli
 3. **Compress** (optional, done automatically in CI):
    ```bash
    cd public/dicts
-   gzip -k -9 en.json ru.json
+   gzip -k -9 en.json ru.json ru-strict.json
    ```
 
 4. **Trigger CI workflow**:
@@ -103,15 +103,23 @@ VITE_GITHUB_REPO=your-username/your-repo npm run build
 ### Dictionary URLs
 
 Dictionaries are served from:
-- Compressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/{lang}.json.gz`
-- Uncompressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/{lang}.json`
+- **English**: 
+  - Compressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/en.json.gz`
+  - Uncompressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/en.json`
+- **Russian (Full)**:
+  - Compressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/ru.json.gz`
+  - Uncompressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/ru.json`
+- **Russian (Strict)**:
+  - Compressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/ru-strict.json.gz`
+  - Uncompressed: `https://raw.githubusercontent.com/{REPO}/assets/dicts/ru-strict.json`
 
 ## Compression
 
 ### Why Compress?
 
 - **English dictionary**: ~7.2 MB → ~1.5 MB (gzip)
-- **Russian dictionary**: ~15 MB → ~3 MB (gzip)
+- **Russian dictionary (full)**: ~15 MB → ~3 MB (gzip)
+- **Russian dictionary (strict)**: ~8 MB → ~2 MB (gzip, estimated - smaller due to fewer word forms)
 - **Total savings**: ~75% reduction in download size
 
 ### Decompression

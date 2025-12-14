@@ -42,9 +42,9 @@ jobs:
         run: |
           cd public/dicts
           # Compress with maximum compression (-9) and keep original files (-k)
-          gzip -k -9 en.json ru.json
+          gzip -k -9 en.json ru.json ru-strict.json
           # Verify compressed files exist
-          if [ ! -f en.json.gz ] || [ ! -f ru.json.gz ]; then
+          if [ ! -f en.json.gz ] || [ ! -f ru.json.gz ] || [ ! -f ru-strict.json.gz ]; then
             echo "Error: Failed to compress dictionaries"
             exit 1
           fi
@@ -54,6 +54,7 @@ jobs:
           echo "Compression ratios:"
           du -h en.json en.json.gz | awk '{print $1}' | paste - - | awk '{printf "en.json: %s -> %s (%.1f%% reduction)\n", $1, $2, (1-$2/$1)*100}'
           du -h ru.json ru.json.gz | awk '{print $1}' | paste - - | awk '{printf "ru.json: %s -> %s (%.1f%% reduction)\n", $1, $2, (1-$2/$1)*100}'
+          du -h ru-strict.json ru-strict.json.gz | awk '{print $1}' | paste - - | awk '{printf "ru-strict.json: %s -> %s (%.1f%% reduction)\n", $1, $2, (1-$2/$1)*100}'
 
       - name: Setup Git
         run: |
@@ -111,7 +112,14 @@ jobs:
           echo "## Dictionary Generation Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Dictionaries are available at:" >> $GITHUB_STEP_SUMMARY
+          echo "### English" >> $GITHUB_STEP_SUMMARY
           echo "- Compressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/en.json.gz\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Compressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/ru.json.gz\`" >> $GITHUB_STEP_SUMMARY
           echo "- Uncompressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/en.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Russian (Full)" >> $GITHUB_STEP_SUMMARY
+          echo "- Compressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/ru.json.gz\`" >> $GITHUB_STEP_SUMMARY
           echo "- Uncompressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/ru.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Russian (Strict)" >> $GITHUB_STEP_SUMMARY
+          echo "- Compressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/ru-strict.json.gz\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Uncompressed: \`https://raw.githubusercontent.com/${REPO_NAME}/assets/dicts/ru-strict.json\`" >> $GITHUB_STEP_SUMMARY
