@@ -871,6 +871,11 @@ button.danger:hover {
   box-shadow: inset 0 0 0 2px rgba(148, 163, 184, 0.45);
 }
 
+/* Last committed move highlight (subtle inset border) */
+.cell.last-move::before {
+  box-shadow: inset 0 0 0 3px rgba(245, 158, 11, 0.85);
+}
+
 .cell.pending.valid {
   animation: none;
   box-shadow: 0 0 0 2px var(--accent-green), 0 0 14px rgba(34, 197, 94, 0.45);

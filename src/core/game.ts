@@ -45,6 +45,7 @@ export class ScrabbleGame {
       players,
       language,
       moveNumber: 0,
+      lastMove: null,
       history: [],
       sessionId: crypto.randomUUID()
     };
@@ -198,6 +199,11 @@ export class ScrabbleGame {
     // Update scores and turn
     state.scores[playerId] += scoreResult.score;
     state.moveNumber += 1;
+    state.lastMove = {
+      moveNumber: state.moveNumber,
+      playerId,
+      placed: placements.map((p) => ({ x: p.x, y: p.y }))
+    };
     state.currentPlayer = nextPlayer(state.players, playerId);
     recordHistory(state, {
       type: 'MOVE',

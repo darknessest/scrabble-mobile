@@ -1070,6 +1070,7 @@ function renderBoard() {
   }
 
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
+  const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
   const ghostPlacements =
     remoteDraft &&
       remoteDraft.moveNumber === state.moveNumber &&
@@ -1088,6 +1089,7 @@ function renderBoard() {
       const premium = premiumClass(x, y);
       const isNew = placementKeys.has(`${x},${y}`);
       const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
+      const isLastMove = !isNew && lastMoveKeys.has(`${x},${y}`);
       const validationClass =
         isNew && validationStatus === 'valid'
           ? 'valid'
@@ -1101,12 +1103,15 @@ function renderBoard() {
         premium,
         isNew ? 'pending' : '',
         isGhost ? 'remote-draft' : '',
+        isLastMove ? 'last-move' : '',
         validationClass
       ]
         .filter(Boolean)
         .join(' ');
+      const ariaLabel = `Cell ${x},${y}${isLastMove ? ' (last move)' : ''}`;
+      const lastMoveAttrs = isLastMove ? ' data-last-move="true"' : '';
       cells.push(
-        `<div class="${classes}" data-x="${x}" data-y="${y}">
+        `<div class="${classes}" role="button" tabindex="0" aria-label="${ariaLabel}" data-x="${x}" data-y="${y}"${lastMoveAttrs}>
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
         </div>`
       );

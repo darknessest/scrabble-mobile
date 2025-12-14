@@ -33,6 +33,17 @@ export interface GameState {
   players: string[];
   language: Language;
   moveNumber: number;
+  /**
+   * Coordinates of tiles placed on the most recent successful MOVE.
+   * Used purely for UI highlighting (synced so peers see it too).
+   */
+  lastMove?:
+  | {
+    moveNumber: number;
+    playerId: string;
+    placed: Array<{ x: number; y: number }>;
+  }
+  | null;
   history: GameHistoryEntry[];
   sessionId: string;
 }
