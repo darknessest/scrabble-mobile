@@ -903,6 +903,11 @@ async function updateValidation() {
   validationNonce += 1;
   const ticket = validationNonce;
 
+  // Placements affect multiple action buttons (especially Clear placements / Confirm move).
+  // Ensure their disabled state stays in sync whenever validation runs (which we call after
+  // any local placement changes).
+  applyActionButtonsState();
+
   if (!currentState || !meta || placements.length === 0) {
     validationStatus = 'idle';
     renderBoard();
