@@ -19,8 +19,9 @@ export interface WordInfo {
 }
 
 // Cache for word sets (for fast lookup) and full entries (for metadata)
-const memoryCache: Partial<Record<Language, Set<string>>> = {};
-const entryCache: Partial<Record<Language, Map<string, DictionaryEntry>>> = {};
+// Using string keys to support both Language ('en', 'ru') and variants ('ru-strict')
+const memoryCache: Partial<Record<string, Set<string>>> = {};
+const entryCache: Partial<Record<string, Map<string, DictionaryEntry>>> = {};
 
 const BASE = import.meta.env.BASE_URL ?? '/';
 
@@ -279,7 +280,7 @@ export async function hasWord(word: string, language: Language): Promise<boolean
   const status = await ensureDictionary(language);
   const norm = normalize(word);
   if (norm.length < minLength) return false;
-  
+
   if (!status.available) {
     // For Russian, check strict version as fallback
     if (language === 'ru') {
@@ -290,17 +291,17 @@ export async function hasWord(word: string, language: Language): Promise<boolean
     }
     return false;
   }
-  
+
   // Check primary dictionary
   if (memoryCache[language]?.has(norm)) {
     return true;
   }
-  
+
   // For Russian, also check strict version as fallback
   if (language === 'ru' && memoryCache['ru-strict']?.has(norm)) {
     return true;
   }
-  
+
   return false;
 }
 
