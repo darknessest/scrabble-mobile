@@ -37,6 +37,11 @@ interface SessionMeta {
   lastTurnEvent?: TurnEvent;
   gameOver?: GameOverEvent;
   /**
+   * Russian dictionary variant: 'full' (all inflected forms) or 'strict' (nominative+plural only for nouns)
+   * Only applies when language is 'ru'
+   */
+  russianDictionaryVariant?: 'full' | 'strict';
+  /**
    * Pre-game sync (P2P only): both users must click "Ready".
    *
    * Back-compat note:
@@ -147,6 +152,14 @@ app.innerHTML = `
               <option value="en">English</option>
               <option value="ru">Русский</option>
             </select>
+          </label>
+          <label class="stack" id="russian-variant" style="display: none;">
+            <span class="label">Russian dictionary</span>
+            <select id="russian-dict-variant">
+              <option value="full">Full (all forms)</option>
+              <option value="strict">Strict (nominative+plural only)</option>
+            </select>
+            <p class="hint">Full: all inflected forms. Strict: nouns nominative+plural only, others base forms.</p>
           </label>
           <label class="stack">
             <span class="label">Minimum word length</span>
@@ -270,6 +283,21 @@ app.innerHTML = `
           <span id="rack-owner" class="hint"></span>
         </div>
         <div id="rack" class="rack"></div>
+        <details class="coord-place">
+          <summary>Place by coordinates</summary>
+          <div class="row gap wrap">
+            <label class="stack">
+              <span class="label">X</span>
+              <input id="place-x" type="number" min="0" max="14" value="7" />
+            </label>
+            <label class="stack">
+              <span class="label">Y</span>
+              <input id="place-y" type="number" min="0" max="14" value="7" />
+            </label>
+            <button id="place-at" class="ghost" title="Place selected rack tile at X,Y">Place</button>
+          </div>
+          <p class="hint">Optional accessibility helper: select a rack tile, then place it at coordinates.</p>
+        </details>
         <div class="row wrap gap">
           <button id="confirm-move" class="primary">Confirm move</button>
           <button id="clear-placements" class="ghost">Clear placements</button>
@@ -312,6 +340,8 @@ app.innerHTML = `
 `;
 
 const languageSelect = document.querySelector<HTMLSelectElement>('#language')!;
+const russianVariantSelect = document.querySelector<HTMLSelectElement>('#russian-dict-variant')!;
+const russianVariantWrapper = document.querySelector<HTMLElement>('#russian-variant')!;
 const offlineStatus = document.querySelector<HTMLSpanElement>('#offline-status')!;
 const dictStatus = document.querySelector<HTMLSpanElement>('#dict-status')!;
 const p2pStatus = document.querySelector<HTMLSpanElement>('#p2p-status')!;
@@ -345,6 +375,9 @@ const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-pla
 const mixRackBtn = document.querySelector<HTMLButtonElement>('#mix-rack')!;
 const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
 const exchangeBtn = document.querySelector<HTMLButtonElement>('#exchange-btn')!;
+const placeXInput = document.querySelector<HTMLInputElement>('#place-x')!;
+const placeYInput = document.querySelector<HTMLInputElement>('#place-y')!;
+const placeAtBtn = document.querySelector<HTMLButtonElement>('#place-at')!;
 
 const copyOfferBtn = document.querySelector<HTMLButtonElement>('#copy-offer')!;
 const offerText = document.querySelector<HTMLTextAreaElement>('#offer-text')!;
@@ -407,6 +440,8 @@ let rackOrder: string[] = [];
 let rackOrderSessionId: string | null = null;
 
 setupEvents();
+// Initialize Russian variant selector visibility
+russianVariantWrapper.style.display = languageSelect.value === 'ru' ? 'flex' : 'none';
 renderNetworkStatus();
 renderVersion();
 applyModeUI();
@@ -446,8 +481,17 @@ function setupEvents() {
   });
 
   languageSelect.addEventListener('change', () => {
+    const language = languageSelect.value as Language;
     if (meta) {
-      meta.language = languageSelect.value as Language;
+      meta.language = language;
+    }
+    // Show/hide Russian variant selector
+    russianVariantWrapper.style.display = language === 'ru' ? 'flex' : 'none';
+  });
+
+  russianVariantSelect.addEventListener('change', () => {
+    if (meta) {
+      meta.russianDictionaryVariant = russianVariantSelect.value as 'full' | 'strict';
     }
   });
 
@@ -462,6 +506,17 @@ function setupEvents() {
   });
 
   confirmMoveBtn.addEventListener('click', () => submitMove());
+  placeAtBtn.addEventListener('click', () => {
+    if (!currentState || !meta) return;
+    if (isPreGameLocked()) return;
+    if (meta.gameOver) return;
+    if (currentState.currentPlayer !== meta.localPlayerId) return;
+    const x = clampInt(Number(placeXInput.value), 0, BOARD_SIZE - 1);
+    const y = clampInt(Number(placeYInput.value), 0, BOARD_SIZE - 1);
+    placeXInput.value = String(x);
+    placeYInput.value = String(y);
+    placeSelectedTileAt(x, y);
+  });
   clearPlacementsBtn.addEventListener('click', () => {
     placements = [];
     selectedTileId = null;
@@ -884,9 +939,46 @@ async function maybeAutoPassOnTimeout() {
   }
 }
 
+/**
+ * Check word using the selected Russian dictionary variant
+ */
+async function hasWordWithVariant(word: string, language: Language, variant?: 'full' | 'strict'): Promise<boolean> {
+  if (language === 'ru' && variant === 'strict') {
+    // Use strict dictionary only
+    const strictStatus = await ensureDictionaryStrict();
+    if (!strictStatus.available) return false;
+    const norm = word.trim().toUpperCase();
+    const minLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
+    if (norm.length < minLength) return false;
+    // Access the cache directly - we know it's loaded from ensureDictionaryStrict
+    const cache = await getDictionaryWordSet('ru-strict' as any);
+    return cache?.has(norm) ?? false;
+  } else if (language === 'ru' && variant === 'full') {
+    // Use full dictionary only (don't fall back to strict)
+    const status = await ensureDictionary(language);
+    if (!status.available) return false;
+    const norm = word.trim().toUpperCase();
+    const minLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
+    if (norm.length < minLength) return false;
+    const cache = await getDictionaryWordSet(language);
+    return cache?.has(norm) ?? false;
+  } else {
+    // Default behavior for non-Russian or when variant not specified
+    return hasWord(word, language);
+  }
+}
+
 function buildWordChecker(): WordChecker {
-  const fn = ((word: string, language: Language) => hasWord(word, language)) as WordChecker;
-  fn.getAllWords = ((language: Language) => getDictionaryWordSet(language)) as WordChecker['getAllWords'];
+  const variant = meta?.russianDictionaryVariant;
+  const fn = ((word: string, language: Language) => {
+    return hasWordWithVariant(word, language, variant);
+  }) as WordChecker;
+  fn.getAllWords = ((language: Language) => {
+    if (language === 'ru' && variant === 'strict') {
+      return getDictionaryWordSet('ru-strict' as any) as Promise<Iterable<string> | null>;
+    }
+    return getDictionaryWordSet(language);
+  }) as WordChecker['getAllWords'];
   return fn;
 }
 
@@ -986,8 +1078,13 @@ async function updateValidation() {
 function renderHandshakeVisibility() {
   const hostCard = document.querySelector<HTMLDivElement>('#host-handshake')!;
   const clientCard = document.querySelector<HTMLDivElement>('#client-handshake')!;
-  hostCard.style.display = mode === 'host' ? 'block' : 'none';
-  clientCard.style.display = mode === 'client' ? 'block' : 'none';
+  const hostVisible = mode === 'host';
+  const clientVisible = mode === 'client';
+  hostCard.style.display = hostVisible ? 'block' : 'none';
+  clientCard.style.display = clientVisible ? 'block' : 'none';
+  // Help screen readers (and our test browser snapshot) ignore hidden chunks.
+  hostCard.setAttribute('aria-hidden', hostVisible ? 'false' : 'true');
+  clientCard.setAttribute('aria-hidden', clientVisible ? 'false' : 'true');
 }
 
 function applyModeUI() {
@@ -1017,8 +1114,14 @@ function renderModeControls() {
   minLengthInput.disabled = isJoin;
 
   languageSelect.disabled = isJoin;
+  russianVariantSelect.disabled = isJoin;
   if (languageWrapper) {
     languageWrapper.style.display = isJoin ? 'none' : '';
+  }
+  // Show/hide Russian variant selector based on language
+  if (!isJoin) {
+    const language = languageSelect.value as Language;
+    russianVariantWrapper.style.display = language === 'ru' ? 'flex' : 'none';
   }
   timerInput.disabled = isJoin;
   timerEnabledToggle.disabled = isJoin;
@@ -1073,7 +1176,9 @@ async function maybeAutoApplyHostAnswer() {
 
 function renderVisibility() {
   settingsSection.style.display = settingsHidden ? 'none' : '';
+  settingsSection.setAttribute('aria-hidden', settingsHidden ? 'true' : 'false');
   logEl.style.display = logsHidden ? 'none' : '';
+  logEl.setAttribute('aria-hidden', logsHidden ? 'true' : 'false');
   toggleSetupBtn.textContent = settingsHidden ? 'Show setup' : 'Hide setup';
   toggleSetupBtn.setAttribute('aria-pressed', settingsHidden ? 'true' : 'false');
   toggleLogsBtn.textContent = logsHidden ? 'Show logs' : 'Hide logs';
@@ -1088,7 +1193,12 @@ function renderBoard() {
   }
 
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
-  const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
+  const lastWordBox = computeLastWordBox(state);
+  const overlay = lastWordBox
+    ? `<div class="last-word-box" role="img" aria-label="Last move highlight"
+        style="grid-column:${lastWordBox.xStart + 1} / ${lastWordBox.xEnd + 2}; grid-row:${lastWordBox.yStart + 1} / ${lastWordBox.yEnd + 2};">
+      </div>`
+    : '';
   const ghostPlacements =
     remoteDraft &&
       remoteDraft.moveNumber === state.moveNumber &&
@@ -1107,7 +1217,6 @@ function renderBoard() {
       const premium = premiumClass(x, y);
       const isNew = placementKeys.has(`${x},${y}`);
       const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
-      const isLastMove = !isNew && lastMoveKeys.has(`${x},${y}`);
       const validationClass =
         isNew && validationStatus === 'valid'
           ? 'valid'
@@ -1121,25 +1230,54 @@ function renderBoard() {
         premium,
         isNew ? 'pending' : '',
         isGhost ? 'remote-draft' : '',
-        isLastMove ? 'last-move' : '',
         validationClass
       ]
         .filter(Boolean)
         .join(' ');
-      const ariaLabel = `Cell ${x},${y}${isLastMove ? ' (last move)' : ''}`;
-      const lastMoveAttrs = isLastMove ? ' data-last-move="true"' : '';
+      const ariaLabel = `Cell ${x},${y}`;
       cells.push(
-        `<div class="${classes}" role="button" tabindex="0" aria-label="${ariaLabel}" data-x="${x}" data-y="${y}"${lastMoveAttrs}>
+        `<div class="${classes}" role="button" tabindex="0" aria-label="${ariaLabel}" data-x="${x}" data-y="${y}">
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
         </div>`
       );
     }
     rows.push(`<div class="row">${cells.join('')}</div>`);
   }
-  boardEl.innerHTML = rows.join('');
+  boardEl.innerHTML = overlay + rows.join('');
 
   turnIndicator.textContent = labels[state.currentPlayer] ?? state.currentPlayer;
   turnIndicator.classList.toggle('active', meta?.localPlayerId === state.currentPlayer);
+}
+
+function computeLastWordBox(state: GameState): { xStart: number; yStart: number; xEnd: number; yEnd: number } | null {
+  const last = state.lastMove;
+  if (!last || !last.placed.length) return null;
+
+  const xs = last.placed.map((p) => p.x);
+  const ys = last.placed.map((p) => p.y);
+  const uniqX = new Set(xs).size;
+  const uniqY = new Set(ys).size;
+
+  // Moves are always aligned; if we can't infer, don't render a box.
+  const isHorizontal = uniqY === 1;
+  const isVertical = uniqX === 1;
+  if (!isHorizontal && !isVertical) return null;
+
+  if (isHorizontal) {
+    const y = ys[0]!;
+    let xStart = Math.min(...xs);
+    let xEnd = Math.max(...xs);
+    while (xStart > 0 && state.board[y]?.[xStart - 1]?.tile) xStart -= 1;
+    while (xEnd < BOARD_SIZE - 1 && state.board[y]?.[xEnd + 1]?.tile) xEnd += 1;
+    return { xStart, yStart: y, xEnd, yEnd: y };
+  }
+
+  const x = xs[0]!;
+  let yStart = Math.min(...ys);
+  let yEnd = Math.max(...ys);
+  while (yStart > 0 && state.board[yStart - 1]?.[x]?.tile) yStart -= 1;
+  while (yEnd < BOARD_SIZE - 1 && state.board[yEnd + 1]?.[x]?.tile) yEnd += 1;
+  return { xStart: x, yStart, xEnd: x, yEnd };
 }
 
 function renderRack() {
@@ -1329,42 +1467,7 @@ function onBoardClick(ev: MouseEvent) {
   }
 
   if (selectedTileId) {
-    const tile = takeAvailableTile(selectedTileId);
-    if (!tile) return;
-
-    // Handle blank tile letter selection
-    if (tile.blank) {
-      selectBlankLetter(tile).then((updatedTile) => {
-        if (updatedTile) {
-          // Replace existing placement if any
-          const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
-          if (existingIdx >= 0) {
-            placements.splice(existingIdx, 1);
-          }
-
-          placements.push({ x, y, tile: updatedTile });
-          selectedTileId = null;
-          sendDraftPlacements();
-          renderBoard();
-          renderRack();
-          updateValidation();
-        }
-      });
-      return;
-    }
-
-    // Replace existing placement if any
-    const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
-    if (existingIdx >= 0) {
-      placements.splice(existingIdx, 1);
-    }
-
-    placements.push({ x, y, tile });
-    selectedTileId = null;
-    sendDraftPlacements();
-    renderBoard();
-    renderRack();
-    updateValidation();
+    placeSelectedTileAt(x, y);
   } else {
     // Remove pending tile if tapped
     const idx = placements.findIndex((p) => p.x === x && p.y === y);
@@ -1376,6 +1479,54 @@ function onBoardClick(ev: MouseEvent) {
       updateValidation();
     }
   }
+}
+
+function placeSelectedTileAt(x: number, y: number) {
+  if (!currentState || !meta) return;
+  if (!selectedTileId) return;
+  if (currentState.board[y][x].tile) return;
+
+  const tile = takeAvailableTile(selectedTileId);
+  if (!tile) return;
+
+  // Handle blank tile letter selection
+  if (tile.blank) {
+    selectBlankLetter(tile).then((updatedTile) => {
+      if (!updatedTile) return;
+
+      // Replace existing placement if any
+      const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
+      if (existingIdx >= 0) {
+        placements.splice(existingIdx, 1);
+      }
+
+      placements.push({ x, y, tile: updatedTile });
+      selectedTileId = null;
+      sendDraftPlacements();
+      renderBoard();
+      renderRack();
+      updateValidation();
+    });
+    return;
+  }
+
+  // Replace existing placement if any
+  const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
+  if (existingIdx >= 0) {
+    placements.splice(existingIdx, 1);
+  }
+
+  placements.push({ x, y, tile });
+  selectedTileId = null;
+  sendDraftPlacements();
+  renderBoard();
+  renderRack();
+  updateValidation();
+}
+
+function clampInt(v: number, min: number, max: number): number {
+  if (!Number.isFinite(v)) return min;
+  return Math.min(max, Math.max(min, Math.floor(v)));
 }
 
 function takeAvailableTile(tileId: string): Tile | null {
@@ -1497,6 +1648,7 @@ async function startSession() {
 
   const language = languageSelect.value as Language;
   languageSelect.value = language;
+  const russianVariant = language === 'ru' ? (russianVariantSelect.value as 'full' | 'strict') : undefined;
   const me = meInput.value || 'Player 1';
   const peer = peerInput.value || 'Player 2';
   const localId = mode === 'solo' ? 'p1' : 'host';
@@ -1512,6 +1664,10 @@ async function startSession() {
   const shouldStartTimerNow = mode === 'solo';
 
   await ensureLanguage(language);
+  // Ensure the selected Russian dictionary variant is available
+  if (language === 'ru' && russianVariant === 'strict') {
+    await ensureDictionaryStrict();
+  }
 
   const state = game.start(language, players);
   meta = {
@@ -1519,6 +1675,7 @@ async function startSession() {
     language,
     isHost: mode === 'host' || mode === 'solo',
     localPlayerId: localId,
+    russianDictionaryVariant: russianVariant,
     remotePlayerId: remoteId,
     sessionId: state.sessionId,
     minWordLength,
@@ -1769,6 +1926,13 @@ async function handleMessage(data: unknown) {
     placements = [];
     remoteDraft = null;
     languageSelect.value = meta.language;
+    // Update Russian variant selector if applicable
+    if (meta.language === 'ru') {
+      russianVariantWrapper.style.display = 'flex';
+      russianVariantSelect.value = meta.russianDictionaryVariant || 'full';
+    } else {
+      russianVariantWrapper.style.display = 'none';
+    }
     mode = meta.mode;
     applyModeUI();
     applyTimerInputFromMeta();
@@ -2196,9 +2360,20 @@ async function checkSavedSnapshot() {
 async function resumeSnapshot() {
   if (!pendingSnapshot) return;
   await ensureLanguage(pendingSnapshot.meta.language);
+  // Ensure the selected Russian dictionary variant is available
+  if (pendingSnapshot.meta.language === 'ru' && pendingSnapshot.meta.russianDictionaryVariant === 'strict') {
+    await ensureDictionaryStrict();
+  }
   meta = pendingSnapshot.meta;
   labels = pendingSnapshot.labels;
   languageSelect.value = pendingSnapshot.meta.language;
+  // Update Russian variant selector if applicable
+  if (pendingSnapshot.meta.language === 'ru') {
+    russianVariantWrapper.style.display = 'flex';
+    russianVariantSelect.value = pendingSnapshot.meta.russianDictionaryVariant || 'full';
+  } else {
+    russianVariantWrapper.style.display = 'none';
+  }
   mode = pendingSnapshot.meta.mode;
   applyModeUI();
   applyTimerInputFromMeta();
