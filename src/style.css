@@ -905,15 +905,23 @@ button.danger:hover {
   font-weight: 700;
   color: var(--tile-text);
   text-shadow: none;
-  line-height: 1;
+  /* Give diacritics (Й/Ё) a bit of "headroom" so they don't get clipped by the cell's overflow. */
+  display: block;
+  line-height: 1.15;
+  padding-top: 0.06em;
   font-size: clamp(0.85rem, 3vw, 1.35rem);
 }
 
 .cell .value {
-  font-size: 0.7em;
-  font-weight: 600;
+  /* Keep the score out of the flex flow so the letter stays perfectly centered. */
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 0.55em;
+  font-weight: 700;
   color: var(--tile-text);
-  opacity: 0.7;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Cell with tile */
@@ -984,7 +992,10 @@ button.danger:hover {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--tile-text);
-  line-height: 1;
+  /* Match board behavior: ensure diacritics render comfortably inside the tile. */
+  display: block;
+  line-height: 1.15;
+  padding-top: 0.04em;
 }
 
 .tile .value {
