@@ -466,7 +466,7 @@ let readyTicker: number | null = null;
 type EndgameScanUiState = 'idle' | 'running' | 'error';
 let endgameScanUi: EndgameScanUiState = 'idle';
 let endgameScanLastToken: string | null = null;
-let endgameScanInFlight: { requestId: string; token: string } | null = null;
+let endgameScanInFlight: { requestId: string; token: string; startedAt: number; debug: boolean } | null = null;
 let endgameWorker: Worker | null = null;
 
 if (typeof Worker !== 'undefined') {
@@ -1274,7 +1274,22 @@ function buildWordChecker(): WordChecker {
 }
 
 type EndgameWorkerMessage =
-  | { type: 'ENDGAME_SCAN_RESPONSE'; requestId: string; allStuck: boolean; reason?: string; error?: string };
+  | {
+    type: 'ENDGAME_SCAN_RESPONSE';
+    requestId: string;
+    allStuck: boolean;
+    reason?: string;
+    error?: string;
+    debug?: {
+      dictKey: string;
+      dictionaryWords: number;
+      anchors: number;
+      boardTiles: number;
+      minLength: number;
+      cacheHit: boolean;
+      timingsMs: { total: number; trieBuild?: number; crossMasks: number; search: number };
+    };
+  };
 
 function resolveMinWordLength(): number {
   return Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
@@ -1303,6 +1318,19 @@ function setEndgameScanUi(state: EndgameScanUiState, message?: string) {
   } else {
     endgameScanStatus.textContent = message ?? 'Endgame scan failed';
     endgameScanStatus.classList.add('danger');
+  }
+}
+
+function isEndgameScanDebugEnabled(): boolean {
+  // Toggle with either:
+  // - localStorage.setItem('scrabble.debugEndgameScan', '1')
+  // - URL param ?debugEndgameScan=1
+  try {
+    const param = new URLSearchParams(window.location.search).get('debugEndgameScan');
+    if (param === '1' || param === 'true') return true;
+    return localStorage.getItem('scrabble.debugEndgameScan') === '1';
+  } catch {
+    return false;
   }
 }
 
@@ -1338,8 +1366,10 @@ function requestEndgameScanIfNeeded() {
   if (endgameScanLastToken === token) return;
 
   const requestId = crypto.randomUUID();
-  endgameScanInFlight = { requestId, token };
+  const debug = isEndgameScanDebugEnabled();
+  endgameScanInFlight = { requestId, token, startedAt: Date.now(), debug };
   setEndgameScanUi('running');
+  appendLog(`Endgame scan started (bag empty).${debug ? ' (debug on)' : ''}`);
 
   endgameWorker.postMessage({
     type: 'ENDGAME_SCAN_REQUEST',
@@ -1347,7 +1377,8 @@ function requestEndgameScanIfNeeded() {
     state: currentState,
     language: meta.language,
     russianVariant: meta.russianDictionaryVariant,
-    minLength: resolveMinWordLength()
+    minLength: resolveMinWordLength(),
+    debug
   });
 }
 
@@ -1357,6 +1388,8 @@ function handleEndgameWorkerMessage(msg: EndgameWorkerMessage) {
   if (msg.requestId !== endgameScanInFlight.requestId) return;
 
   const token = endgameScanInFlight.token;
+  const elapsedMs = Date.now() - endgameScanInFlight.startedAt;
+  const debugEnabled = endgameScanInFlight.debug;
   endgameScanInFlight = null;
   endgameScanLastToken = token;
 
@@ -1369,12 +1402,59 @@ function handleEndgameWorkerMessage(msg: EndgameWorkerMessage) {
 
   if (msg.reason === 'error') {
     setEndgameScanUi('error', 'Endgame scan error');
+    appendLog(`Endgame scan error after ${elapsedMs}ms: ${msg.error ?? 'unknown error'}`);
+    if (debugEnabled && msg.debug) {
+      appendLog(
+        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
+          msg.debug.timingsMs.total
+        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
+          msg.debug.timingsMs.crossMasks
+        )}, search=${Math.round(msg.debug.timingsMs.search)})`
+      );
+    }
+    return;
+  }
+
+  if (msg.reason === 'dictionary_unavailable') {
+    // We refuse to declare "no moves" without a full dictionary to avoid false positives.
+    setEndgameScanUi('idle');
+    appendLog(`Endgame scan skipped after ${elapsedMs}ms: dictionary unavailable (won't auto-end).`);
+    if (debugEnabled && msg.debug) {
+      appendLog(
+        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
+          msg.debug.timingsMs.total
+        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
+          msg.debug.timingsMs.crossMasks
+        )}, search=${Math.round(msg.debug.timingsMs.search)})`
+      );
+    }
     return;
   }
 
   if (!msg.allStuck) {
     setEndgameScanUi('idle');
+    appendLog(`Endgame scan finished in ${elapsedMs}ms: moves available.`);
+    if (debugEnabled && msg.debug) {
+      appendLog(
+        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
+          msg.debug.timingsMs.total
+        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
+          msg.debug.timingsMs.crossMasks
+        )}, search=${Math.round(msg.debug.timingsMs.search)})`
+      );
+    }
     return;
+  }
+
+  appendLog(`Endgame scan finished in ${elapsedMs}ms: no moves for all players.`);
+  if (debugEnabled && msg.debug) {
+    appendLog(
+      `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
+        msg.debug.timingsMs.total
+      )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
+        msg.debug.timingsMs.crossMasks
+      )}, search=${Math.round(msg.debug.timingsMs.search)})`
+    );
   }
 
   // All players stuck: finish the game (authoritatively).

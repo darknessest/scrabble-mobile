@@ -10,6 +10,26 @@ type EndgameScanRequest = {
   language: Language;
   russianVariant?: RussianVariant;
   minLength: number;
+  /**
+   * When true, includes additional debug/timing information in the response.
+   * Keep this off by default to avoid log noise.
+   */
+  debug?: boolean;
+};
+
+type EndgameScanDebug = {
+  dictKey: DictionaryKey;
+  dictionaryWords: number;
+  anchors: number;
+  boardTiles: number;
+  minLength: number;
+  cacheHit: boolean;
+  timingsMs: {
+    total: number;
+    trieBuild?: number;
+    crossMasks: number;
+    search: number;
+  };
 };
 
 type EndgameScanResponse =
@@ -18,6 +38,7 @@ type EndgameScanResponse =
     requestId: string;
     allStuck: boolean;
     reason?: 'dictionary_unavailable';
+    debug?: EndgameScanDebug;
   }
   | {
     type: 'ENDGAME_SCAN_RESPONSE';
@@ -25,6 +46,7 @@ type EndgameScanResponse =
     allStuck: false;
     reason: 'error';
     error: string;
+    debug?: EndgameScanDebug;
   };
 
 const BOARD_SIZE = 15;
@@ -512,6 +534,7 @@ type TrieCacheEntry = {
 const trieCache: Partial<Record<string, TrieCacheEntry>> = {};
 
 async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
+  const tTotal0 = performance.now();
   try {
     setMinWordLength(req.minLength);
 
@@ -520,7 +543,12 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
 
     const wordSet = await getDictionaryWordSet(dictKey);
     if (!wordSet) {
-      return { type: 'ENDGAME_SCAN_RESPONSE', requestId: req.requestId, allStuck: false, reason: 'dictionary_unavailable' };
+      return {
+        type: 'ENDGAME_SCAN_RESPONSE',
+        requestId: req.requestId,
+        allStuck: false,
+        reason: 'dictionary_unavailable'
+      };
     }
 
     const cached = trieCache[dictKey];
@@ -528,9 +556,13 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
     const letterToIndex = cached?.letterToIndex ?? buildLetterToIndex(alphabet);
     const alphabetLen = alphabet.length;
 
+    let trieBuildMs: number | undefined;
     let root: TrieNode;
-    if (!cached || cached.wordSetRef !== wordSet) {
+    const cacheHit = Boolean(cached && cached.wordSetRef === wordSet);
+    if (!cacheHit) {
+      const tTrie0 = performance.now();
       root = buildTrie(wordSet, letterToIndex);
+      trieBuildMs = performance.now() - tTrie0;
       trieCache[dictKey] = { root, alphabet, alphabetLen, letterToIndex, wordSetRef: wordSet };
     } else {
       root = cached.root;
@@ -538,8 +570,18 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
 
     const anchors = computeAnchors(req.state.board);
     const boardIsEmpty = !boardHasAnyTiles(req.state.board);
-    const crossMasks = computeCrossMasks(req.state.board, alphabet, letterToIndex, wordSet, req.minLength);
+    let boardTiles = 0;
+    for (let y = 0; y < BOARD_SIZE; y += 1) {
+      for (let x = 0; x < BOARD_SIZE; x += 1) {
+        if (req.state.board[y][x].tile) boardTiles += 1;
+      }
+    }
 
+    const tCross0 = performance.now();
+    const crossMasks = computeCrossMasks(req.state.board, alphabet, letterToIndex, wordSet, req.minLength);
+    const crossMasksMs = performance.now() - tCross0;
+
+    const tSearch0 = performance.now();
     for (const playerId of req.state.players) {
       const hasAny = hasAnyValidMoveFast(
         req.state,
@@ -553,18 +595,75 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
         req.minLength
       );
       if (hasAny) {
-        return { type: 'ENDGAME_SCAN_RESPONSE', requestId: req.requestId, allStuck: false };
+        const searchMs = performance.now() - tSearch0;
+        const totalMs = performance.now() - tTotal0;
+        return {
+          type: 'ENDGAME_SCAN_RESPONSE',
+          requestId: req.requestId,
+          allStuck: false,
+          debug: req.debug
+            ? {
+              dictKey,
+              dictionaryWords: wordSet.size,
+              anchors: anchors.length,
+              boardTiles,
+              minLength: req.minLength,
+              cacheHit,
+              timingsMs: {
+                total: totalMs,
+                trieBuild: trieBuildMs,
+                crossMasks: crossMasksMs,
+                search: searchMs
+              }
+            }
+            : undefined
+        };
       }
     }
 
-    return { type: 'ENDGAME_SCAN_RESPONSE', requestId: req.requestId, allStuck: true };
+    const searchMs = performance.now() - tSearch0;
+    const totalMs = performance.now() - tTotal0;
+    return {
+      type: 'ENDGAME_SCAN_RESPONSE',
+      requestId: req.requestId,
+      allStuck: true,
+      debug: req.debug
+        ? {
+          dictKey,
+          dictionaryWords: wordSet.size,
+          anchors: anchors.length,
+          boardTiles,
+          minLength: req.minLength,
+          cacheHit,
+          timingsMs: {
+            total: totalMs,
+            trieBuild: trieBuildMs,
+            crossMasks: crossMasksMs,
+            search: searchMs
+          }
+        }
+        : undefined
+    };
   } catch (err) {
+    const totalMs = performance.now() - tTotal0;
     return {
       type: 'ENDGAME_SCAN_RESPONSE',
       requestId: req.requestId,
       allStuck: false,
       reason: 'error',
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error ? err.message : String(err),
+      debug: req.debug
+        ? {
+          // Best-effort: dictKey is derived above; if we failed before that, fall back.
+          dictKey: (req.language === 'ru' && req.russianVariant === 'strict' ? 'ru-strict' : req.language) as DictionaryKey,
+          dictionaryWords: 0,
+          anchors: 0,
+          boardTiles: 0,
+          minLength: req.minLength,
+          cacheHit: false,
+          timingsMs: { total: totalMs, crossMasks: 0, search: 0 }
+        }
+        : undefined
     };
   }
 }
