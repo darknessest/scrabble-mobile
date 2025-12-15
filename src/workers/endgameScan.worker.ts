@@ -64,215 +64,452 @@ function computeAnchors(board: GameState['board']): Anchor[] {
 
 type Orientation = 'row' | 'col';
 
-function buildPrimaryWord(
-  board: GameState['board'],
-  word: string,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  orientation: Orientation
-): string {
-  const left: string[] = [];
-  if (orientation === 'row') {
-    let x = startX - 1;
-    const y = startY;
-    while (inBounds(x) && board[y][x].tile) {
-      left.push(board[y][x].tile!.letter);
-      x -= 1;
-    }
-    left.reverse();
+const EN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const RU_ALPHABET = 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ';
 
-    const right: string[] = [];
-    x = endX + 1;
-    while (inBounds(x) && board[y][x].tile) {
-      right.push(board[y][x].tile!.letter);
-      x += 1;
-    }
-    return `${left.join('')}${word}${right.join('')}`;
-  }
-
-  // col
-  let y = startY - 1;
-  const x = startX;
-  while (inBounds(y) && board[y][x].tile) {
-    left.push(board[y][x].tile!.letter);
-    y -= 1;
-  }
-  left.reverse();
-
-  const right: string[] = [];
-  y = endY + 1;
-  while (inBounds(y) && board[y][x].tile) {
-    right.push(board[y][x].tile!.letter);
-    y += 1;
-  }
-  return `${left.join('')}${word}${right.join('')}`;
+function alphabetFor(language: DictionaryKey): string {
+  return language === 'en' ? EN_ALPHABET : RU_ALPHABET;
 }
 
-function buildCrossWord(
+function buildLetterToIndex(alphabet: string): Map<string, number> {
+  const map = new Map<string, number>();
+  for (let i = 0; i < alphabet.length; i += 1) {
+    map.set(alphabet[i], i);
+  }
+  return map;
+}
+
+function bitForIndex(i: number): bigint {
+  return 1n << BigInt(i);
+}
+
+function allLettersMask(alphabetLen: number): bigint {
+  // (1<<n)-1, but in BigInt.
+  return (1n << BigInt(alphabetLen)) - 1n;
+}
+
+type TrieNode = {
+  children: Map<number, TrieNode>;
+  end: boolean;
+};
+
+function newTrieNode(): TrieNode {
+  return { children: new Map<number, TrieNode>(), end: false };
+}
+
+function buildTrie(wordSet: Iterable<string>, letterToIndex: Map<string, number>): TrieNode {
+  const root = newTrieNode();
+
+  outer: for (const raw of wordSet) {
+    const w = raw.trim().toUpperCase();
+    if (!w) continue;
+    // Words longer than 15 cannot be placed on the board; skipping reduces trie size.
+    if (w.length > BOARD_SIZE) continue;
+
+    let node = root;
+    for (let i = 0; i < w.length; i += 1) {
+      const idx = letterToIndex.get(w[i]);
+      if (idx === undefined) continue outer;
+      const next = node.children.get(idx) ?? newTrieNode();
+      node.children.set(idx, next);
+      node = next;
+    }
+    node.end = true;
+  }
+
+  return root;
+}
+
+type CrossMasks = {
+  // Masks for placing a tile at [y][x] when primary direction is row/col.
+  row: bigint[][];
+  col: bigint[][];
+};
+
+function computeCrossMasks(
   board: GameState['board'],
-  x: number,
-  y: number,
-  placedLetter: string,
-  orientation: Orientation
-): string {
-  // If primary is row, cross is col. If primary is col, cross is row.
-  if (orientation === 'row') {
+  alphabet: string,
+  letterToIndex: Map<string, number>,
+  wordSet: Set<string>,
+  minLength: number
+): CrossMasks {
+  const alphaLen = alphabet.length;
+  const all = allLettersMask(alphaLen);
+
+  const row: bigint[][] = Array.from({ length: BOARD_SIZE }, () => Array.from({ length: BOARD_SIZE }, () => 0n));
+  const col: bigint[][] = Array.from({ length: BOARD_SIZE }, () => Array.from({ length: BOARD_SIZE }, () => 0n));
+
+  const computeMaskAt = (x: number, y: number, primary: Orientation): bigint => {
+    if (board[y][x].tile) return 0n;
+
+    // primary=row => cross is vertical; primary=col => cross is horizontal.
+    const dx = primary === 'row' ? 0 : 1;
+    const dy = primary === 'row' ? 1 : 0;
+
     const up: string[] = [];
-    let cy = y - 1;
-    while (inBounds(cy) && board[cy][x].tile) {
-      up.push(board[cy][x].tile!.letter);
-      cy -= 1;
+    let cx = x - dx;
+    let cy = y - dy;
+    while (inBounds(cx) && inBounds(cy) && board[cy][cx].tile) {
+      up.push(board[cy][cx].tile!.letter);
+      cx -= dx;
+      cy -= dy;
     }
     up.reverse();
 
     const down: string[] = [];
-    cy = y + 1;
-    while (inBounds(cy) && board[cy][x].tile) {
-      down.push(board[cy][x].tile!.letter);
-      cy += 1;
+    cx = x + dx;
+    cy = y + dy;
+    while (inBounds(cx) && inBounds(cy) && board[cy][cx].tile) {
+      down.push(board[cy][cx].tile!.letter);
+      cx += dx;
+      cy += dy;
     }
 
-    return `${up.join('')}${placedLetter}${down.join('')}`;
+    // No perpendicular neighbors => cross-word is length 1 and is not validated (same as collectFormedWords()).
+    if (up.length === 0 && down.length === 0) return all;
+
+    const prefix = up.join('');
+    const suffix = down.join('');
+    const totalLen = prefix.length + 1 + suffix.length;
+    if (totalLen < minLength) return 0n;
+
+    let mask = 0n;
+    for (let i = 0; i < alphaLen; i += 1) {
+      const letter = alphabet[i];
+      const cross = `${prefix}${letter}${suffix}`;
+      if (wordSet.has(cross)) mask |= bitForIndex(i);
+    }
+    return mask;
+  };
+
+  for (let y = 0; y < BOARD_SIZE; y += 1) {
+    for (let x = 0; x < BOARD_SIZE; x += 1) {
+      if (board[y][x].tile) continue;
+      row[y][x] = computeMaskAt(x, y, 'row');
+      col[y][x] = computeMaskAt(x, y, 'col');
+    }
   }
 
-  const left: string[] = [];
-  let cx = x - 1;
-  while (inBounds(cx) && board[y][cx].tile) {
-    left.push(board[y][cx].tile!.letter);
-    cx -= 1;
-  }
-  left.reverse();
-
-  const right: string[] = [];
-  cx = x + 1;
-  while (inBounds(cx) && board[y][cx].tile) {
-    right.push(board[y][cx].tile!.letter);
-    cx += 1;
-  }
-
-  return `${left.join('')}${placedLetter}${right.join('')}`;
+  // Ensure masks are never referencing unknown letters: `letterToIndex` is used only to build trie/rack.
+  // Cross masks are based on `alphabet` indices, so they are consistent by construction.
+  void letterToIndex;
+  return { row, col };
 }
 
-function rackCountsForPlayer(state: GameState, playerId: string): { counts: Map<string, number>; blanks: number } {
+function rackCountsForPlayer(
+  state: GameState,
+  playerId: string,
+  letterToIndex: Map<string, number>,
+  alphabetLen: number
+): { counts: Uint8Array; blanks: number } {
   const rack = state.racks[playerId] ?? [];
-  const counts = new Map<string, number>();
+  const counts = new Uint8Array(alphabetLen);
   let blanks = 0;
   for (const t of rack) {
     if (t.blank) blanks += 1;
-    const letter = t.letter;
-    counts.set(letter, (counts.get(letter) ?? 0) + 1);
+    if (t.blank) continue;
+    const idx = letterToIndex.get(t.letter);
+    if (idx === undefined) continue;
+    counts[idx] += 1;
   }
   return { counts, blanks };
 }
 
-function hasAnyValidMove(
+function fixedPrefixBeforeAnchor(
+  board: GameState['board'],
+  anchor: Anchor,
+  orientation: Orientation,
+  letterToIndex: Map<string, number>
+): { startX: number; startY: number; letters: number[] } | null {
+  const letters: number[] = [];
+  if (orientation === 'row') {
+    let x = anchor.x - 1;
+    const y = anchor.y;
+    while (inBounds(x) && board[y][x].tile) {
+      const idx = letterToIndex.get(board[y][x].tile!.letter);
+      if (idx === undefined) return null;
+      letters.push(idx);
+      x -= 1;
+    }
+    letters.reverse();
+    return { startX: x + 1, startY: y, letters };
+  }
+
+  // col
+  const x = anchor.x;
+  let y = anchor.y - 1;
+  while (inBounds(y) && board[y][x].tile) {
+    const idx = letterToIndex.get(board[y][x].tile!.letter);
+    if (idx === undefined) return null;
+    letters.push(idx);
+    y -= 1;
+  }
+  letters.reverse();
+  return { startX: x, startY: y + 1, letters };
+}
+
+function traverseFixedPrefix(root: TrieNode, fixed: number[]): TrieNode | null {
+  let node: TrieNode | null = root;
+  for (const idx of fixed) {
+    const next = node.children.get(idx);
+    if (!next) return null;
+    node = next;
+  }
+  return node;
+}
+
+function hasAnyMoveRow(
   state: GameState,
   playerId: string,
-  wordSet: Set<string>,
+  anchors: Anchor[],
+  boardIsEmpty: boolean,
+  root: TrieNode,
+  letterToIndex: Map<string, number>,
+  crossMasksRow: bigint[][],
+  alphabetLen: number,
   minLength: number
 ): boolean {
   const rack = state.racks[playerId] ?? [];
   if (rack.length === 0) return false;
 
-  const boardIsEmpty = !boardHasAnyTiles(state.board);
-  const anchors = computeAnchors(state.board);
-  const { counts: rackCounts, blanks: rackBlanks } = rackCountsForPlayer(state, playerId);
+  const { counts, blanks: initialBlanks } = rackCountsForPlayer(state, playerId, letterToIndex, alphabetLen);
+  const board = state.board;
 
-  // Iterate over the full dictionary; keep the inner checks very cheap.
-  for (const raw of wordSet) {
-    const word = raw.trim().toUpperCase();
-    const len = word.length;
-    if (len < minLength) continue;
-    if (len > BOARD_SIZE) continue;
-
-    for (const anchor of anchors) {
-      for (const orientation of ['row', 'col'] as const) {
-        for (let idx = 0; idx < len; idx += 1) {
-          const startX = orientation === 'row' ? anchor.x - idx : anchor.x;
-          const startY = orientation === 'row' ? anchor.y : anchor.y - idx;
-          const endX = orientation === 'row' ? startX + len - 1 : startX;
-          const endY = orientation === 'row' ? startY : startY + len - 1;
-
-          if (!inBounds(startX) || !inBounds(startY) || !inBounds(endX) || !inBounds(endY)) continue;
-
-          // Quick first-move safety.
-          if (boardIsEmpty) {
-            const coversCenter =
-              orientation === 'row'
-                ? startY === 7 && startX <= 7 && endX >= 7
-                : startX === 7 && startY <= 7 && endY >= 7;
-            if (!coversCenter) continue;
-          }
-
-          // Count required letters for empty cells (existing tiles must match).
-          const needed = new Map<string, number>();
-          let placedCount = 0;
-          let mismatch = false;
-
-          for (let i = 0; i < len; i += 1) {
-            const x = orientation === 'row' ? startX + i : startX;
-            const y = orientation === 'row' ? startY : startY + i;
-            const existing = state.board[y][x].tile;
-            const letter = word[i];
-
-            if (existing) {
-              if (existing.letter !== letter) {
-                mismatch = true;
-                break;
-              }
-              continue;
-            }
-
-            placedCount += 1;
-            needed.set(letter, (needed.get(letter) ?? 0) + 1);
-          }
-
-          if (mismatch) continue;
-          if (placedCount === 0) continue;
-
-          // Check rack sufficiency (letters beyond rack can be covered by blanks).
-          let blanksNeeded = 0;
-          for (const [letter, n] of needed) {
-            const avail = rackCounts.get(letter) ?? 0;
-            if (n > avail) blanksNeeded += n - avail;
-            if (blanksNeeded > rackBlanks) break;
-          }
-          if (blanksNeeded > rackBlanks) continue;
-
-          // Validate the primary word as computeScore() would see it (including any existing extensions).
-          const primary = buildPrimaryWord(state.board, word, startX, startY, endX, endY, orientation);
-          if (primary.length < minLength) continue;
-          if (!wordSet.has(primary)) continue;
-
-          // Validate cross-words created by newly placed tiles.
-          // Mirrors collectFormedWords(): only validate secondary words of length > 1.
-          let crossOk = true;
-          for (let i = 0; i < len; i += 1) {
-            const x = orientation === 'row' ? startX + i : startX;
-            const y = orientation === 'row' ? startY : startY + i;
-            if (state.board[y][x].tile) continue; // not placed
-
-            const cross = buildCrossWord(state.board, x, y, word[i], orientation);
-            if (cross.length > 1) {
-              if (cross.length < minLength || !wordSet.has(cross)) {
-                crossOk = false;
-                break;
-              }
-            }
-          }
-
-          if (!crossOk) continue;
-
-          return true;
-        }
+  const extendRight = (
+    x: number,
+    y: number,
+    node: TrieNode,
+    wordLen: number,
+    blanks: number,
+    usedRack: boolean,
+    anchorX: number
+  ): boolean => {
+    if (x >= BOARD_SIZE) return usedRack && node.end && wordLen >= minLength;
+    const cell = board[y][x].tile;
+    if (cell) {
+      const idx = letterToIndex.get(cell.letter);
+      if (idx === undefined) return false;
+      const next = node.children.get(idx);
+      if (!next) return false;
+      return extendRight(x + 1, y, next, wordLen + 1, blanks, usedRack, anchorX);
+    }
+    if (x !== anchorX && usedRack && node.end && wordLen >= minLength) return true;
+    const mask = crossMasksRow[y][x];
+    for (const [idx, next] of node.children) {
+      if ((mask & bitForIndex(idx)) === 0n) continue;
+      if (counts[idx] > 0) {
+        counts[idx] -= 1;
+        if (extendRight(x + 1, y, next, wordLen + 1, blanks, true, anchorX)) return true;
+        counts[idx] += 1;
+      } else if (blanks > 0) {
+        if (extendRight(x + 1, y, next, wordLen + 1, blanks - 1, true, anchorX)) return true;
       }
+    }
+    return false;
+  };
+
+  const fillLeft = (
+    x: number,
+    endXExclusive: number,
+    y: number,
+    node: TrieNode,
+    blanks: number,
+    fixedAfter: number[],
+    anchorX: number,
+    lenSoFar: number
+  ): boolean => {
+    if (x === endXExclusive) {
+      const afterFixed = traverseFixedPrefix(node, fixedAfter);
+      if (!afterFixed) return false;
+      return extendRight(anchorX, y, afterFixed, lenSoFar + fixedAfter.length, blanks, false, anchorX);
+    }
+    const mask = crossMasksRow[y][x];
+    for (const [idx, next] of node.children) {
+      if ((mask & bitForIndex(idx)) === 0n) continue;
+      if (counts[idx] > 0) {
+        counts[idx] -= 1;
+        if (fillLeft(x + 1, endXExclusive, y, next, blanks, fixedAfter, anchorX, lenSoFar + 1)) return true;
+        counts[idx] += 1;
+      } else if (blanks > 0) {
+        if (fillLeft(x + 1, endXExclusive, y, next, blanks - 1, fixedAfter, anchorX, lenSoFar + 1)) return true;
+      }
+    }
+    return false;
+  };
+
+  for (const anchor of anchors) {
+    const y = anchor.y;
+
+    // Fixed run of existing tiles immediately to the left of the anchor must be part of the word.
+    const fixed = fixedPrefixBeforeAnchor(board, anchor, 'row', letterToIndex);
+    if (!fixed) continue;
+    const fixedLetters = fixed.letters;
+    const fixedStartX = fixed.startX;
+
+    // Count how many empty squares are immediately before the fixed run (potential left extension).
+    let leftLimit = 0;
+    let x = fixedStartX - 1;
+    while (inBounds(x) && board[y][x].tile === null) {
+      leftLimit += 1;
+      x -= 1;
+    }
+
+    // Choose the actual word start among those empty squares (or at fixedStartX).
+    for (let usedLeft = 0; usedLeft <= leftLimit; usedLeft += 1) {
+      const startX = fixedStartX - usedLeft;
+      // If there is a tile immediately before startX, the word would extend further left;
+      // that move will be found when scanning the leftmost newly placed tile as an anchor.
+      if (inBounds(startX - 1) && board[y][startX - 1].tile) continue;
+
+      // First move safety (empty board): must cover center.
+      if (boardIsEmpty) {
+        // With empty board, fixedStartX is 7 and fixedLetters is empty.
+        // The word covers center iff startX <= 7 and it extends at least to 7.
+        // Since anchor is at (7,7), startX <= 7 always; extension happens via extendRight.
+      }
+
+      // Reset per-start choice (counts are mutated in recursion).
+      // We keep counts in a single array; recursion restores changes, so no full clone needed here.
+      const blanks = initialBlanks;
+      if (fillLeft(startX, fixedStartX, y, root, blanks, fixedLetters, anchor.x, 0)) return true;
     }
   }
 
   return false;
 }
+
+function hasAnyMoveCol(
+  state: GameState,
+  playerId: string,
+  anchors: Anchor[],
+  boardIsEmpty: boolean,
+  root: TrieNode,
+  letterToIndex: Map<string, number>,
+  crossMasksCol: bigint[][],
+  alphabetLen: number,
+  minLength: number
+): boolean {
+  const rack = state.racks[playerId] ?? [];
+  if (rack.length === 0) return false;
+
+  const { counts, blanks: initialBlanks } = rackCountsForPlayer(state, playerId, letterToIndex, alphabetLen);
+  const board = state.board;
+
+  const extendDown = (
+    x: number,
+    y: number,
+    node: TrieNode,
+    wordLen: number,
+    blanks: number,
+    usedRack: boolean,
+    anchorY: number
+  ): boolean => {
+    if (y >= BOARD_SIZE) return usedRack && node.end && wordLen >= minLength;
+    const cell = board[y][x].tile;
+    if (cell) {
+      const idx = letterToIndex.get(cell.letter);
+      if (idx === undefined) return false;
+      const next = node.children.get(idx);
+      if (!next) return false;
+      return extendDown(x, y + 1, next, wordLen + 1, blanks, usedRack, anchorY);
+    }
+    if (y !== anchorY && usedRack && node.end && wordLen >= minLength) return true;
+    const mask = crossMasksCol[y][x];
+    for (const [idx, next] of node.children) {
+      if ((mask & bitForIndex(idx)) === 0n) continue;
+      if (counts[idx] > 0) {
+        counts[idx] -= 1;
+        if (extendDown(x, y + 1, next, wordLen + 1, blanks, true, anchorY)) return true;
+        counts[idx] += 1;
+      } else if (blanks > 0) {
+        if (extendDown(x, y + 1, next, wordLen + 1, blanks - 1, true, anchorY)) return true;
+      }
+    }
+    return false;
+  };
+
+  const fillUp = (
+    y: number,
+    endYExclusive: number,
+    x: number,
+    node: TrieNode,
+    blanks: number,
+    fixedAfter: number[],
+    anchorY: number,
+    lenSoFar: number
+  ): boolean => {
+    if (y === endYExclusive) {
+      const afterFixed = traverseFixedPrefix(node, fixedAfter);
+      if (!afterFixed) return false;
+      return extendDown(x, anchorY, afterFixed, lenSoFar + fixedAfter.length, blanks, false, anchorY);
+    }
+    const mask = crossMasksCol[y][x];
+    for (const [idx, next] of node.children) {
+      if ((mask & bitForIndex(idx)) === 0n) continue;
+      if (counts[idx] > 0) {
+        counts[idx] -= 1;
+        if (fillUp(y + 1, endYExclusive, x, next, blanks, fixedAfter, anchorY, lenSoFar + 1)) return true;
+        counts[idx] += 1;
+      } else if (blanks > 0) {
+        if (fillUp(y + 1, endYExclusive, x, next, blanks - 1, fixedAfter, anchorY, lenSoFar + 1)) return true;
+      }
+    }
+    return false;
+  };
+
+  for (const anchor of anchors) {
+    const x = anchor.x;
+
+    const fixed = fixedPrefixBeforeAnchor(board, anchor, 'col', letterToIndex);
+    if (!fixed) continue;
+    const fixedLetters = fixed.letters;
+    const fixedStartY = fixed.startY;
+
+    let upLimit = 0;
+    let y = fixedStartY - 1;
+    while (inBounds(y) && board[y][x].tile === null) {
+      upLimit += 1;
+      y -= 1;
+    }
+
+    for (let usedUp = 0; usedUp <= upLimit; usedUp += 1) {
+      const startY = fixedStartY - usedUp;
+      if (inBounds(startY - 1) && board[startY - 1][x].tile) continue;
+
+      const blanks = initialBlanks;
+      if (fillUp(startY, fixedStartY, x, root, blanks, fixedLetters, anchor.y, 0)) return true;
+    }
+  }
+
+  return false;
+}
+
+function hasAnyValidMoveFast(
+  state: GameState,
+  playerId: string,
+  anchors: Anchor[],
+  boardIsEmpty: boolean,
+  root: TrieNode,
+  letterToIndex: Map<string, number>,
+  crossMasks: CrossMasks,
+  alphabetLen: number,
+  minLength: number
+): boolean {
+  // Try both orientations; early exit on the first found move.
+  if (hasAnyMoveRow(state, playerId, anchors, boardIsEmpty, root, letterToIndex, crossMasks.row, alphabetLen, minLength)) return true;
+  if (hasAnyMoveCol(state, playerId, anchors, boardIsEmpty, root, letterToIndex, crossMasks.col, alphabetLen, minLength)) return true;
+  return false;
+}
+
+type TrieCacheEntry = {
+  root: TrieNode;
+  alphabet: string;
+  alphabetLen: number;
+  letterToIndex: Map<string, number>;
+  wordSetRef: Set<string>;
+};
+
+const trieCache: Partial<Record<string, TrieCacheEntry>> = {};
 
 async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
   try {
@@ -286,8 +523,35 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
       return { type: 'ENDGAME_SCAN_RESPONSE', requestId: req.requestId, allStuck: false, reason: 'dictionary_unavailable' };
     }
 
+    const cached = trieCache[dictKey];
+    const alphabet = alphabetFor(dictKey);
+    const letterToIndex = cached?.letterToIndex ?? buildLetterToIndex(alphabet);
+    const alphabetLen = alphabet.length;
+
+    let root: TrieNode;
+    if (!cached || cached.wordSetRef !== wordSet) {
+      root = buildTrie(wordSet, letterToIndex);
+      trieCache[dictKey] = { root, alphabet, alphabetLen, letterToIndex, wordSetRef: wordSet };
+    } else {
+      root = cached.root;
+    }
+
+    const anchors = computeAnchors(req.state.board);
+    const boardIsEmpty = !boardHasAnyTiles(req.state.board);
+    const crossMasks = computeCrossMasks(req.state.board, alphabet, letterToIndex, wordSet, req.minLength);
+
     for (const playerId of req.state.players) {
-      const hasAny = hasAnyValidMove(req.state, playerId, wordSet, req.minLength);
+      const hasAny = hasAnyValidMoveFast(
+        req.state,
+        playerId,
+        anchors,
+        boardIsEmpty,
+        root,
+        letterToIndex,
+        crossMasks,
+        alphabetLen,
+        req.minLength
+      );
       if (hasAny) {
         return { type: 'ENDGAME_SCAN_RESPONSE', requestId: req.requestId, allStuck: false };
       }
@@ -305,10 +569,21 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
   }
 }
 
-self.addEventListener('message', (ev: MessageEvent) => {
-  const data = ev.data as EndgameScanRequest;
-  if (!data || data.type !== 'ENDGAME_SCAN_REQUEST') return;
-  void runScan(data).then((res) => {
-    (self as unknown as Worker).postMessage(res);
+// Allow importing this module in tests (Node) without a global `self`.
+if (typeof self !== 'undefined' && typeof (self as unknown as Worker).addEventListener === 'function') {
+  self.addEventListener('message', (ev: MessageEvent) => {
+    const data = ev.data as EndgameScanRequest;
+    if (!data || data.type !== 'ENDGAME_SCAN_REQUEST') return;
+    void runScan(data).then((res) => {
+      (self as unknown as Worker).postMessage(res);
+    });
   });
-});
+}
+
+// Test-only hooks (kept tiny and pure; not used by runtime code).
+export const __testing = {
+  buildLetterToIndex,
+  buildTrie,
+  computeCrossMasks,
+  hasAnyValidMoveFast
+};
