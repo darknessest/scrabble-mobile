@@ -32,23 +32,33 @@ const BASE = import.meta.env.BASE_URL ?? '/';
 // The workflow automatically uses the current repository
 const GITHUB_REPO = import.meta.env.VITE_GITHUB_REPO || 'darknessest/scrabble-wpa';
 const ASSETS_BRANCH = 'assets';
-const ASSETS_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}/${ASSETS_BRANCH}/dicts`;
+const DEFAULT_ASSETS_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}/${ASSETS_BRANCH}/dicts`;
 
-// Primary source: compressed dictionaries from assets branch
+const envDictBase = normalizeBaseUrl(import.meta.env.VITE_DICT_BASE);
+const envStrictDictBase = normalizeBaseUrl(import.meta.env.VITE_DICT_STRICT_BASE);
+const envMockDictBase = normalizeBaseUrl(import.meta.env.VITE_DICT_MOCK_BASE);
+const useMockDicts = import.meta.env.VITE_USE_DICT_MOCKS === 'true';
+
+// Allow overriding dictionary hosts for local dev (e.g., Vite dev server middleware)
+const DICT_BASE = useMockDicts && envMockDictBase ? envMockDictBase : envDictBase ?? DEFAULT_ASSETS_BASE;
+const STRICT_DICT_BASE =
+  useMockDicts && envMockDictBase ? envMockDictBase : envStrictDictBase ?? DICT_BASE;
+
+// Primary source: compressed dictionaries
 const COMPRESSED_FILE_MAP: Record<Language, string> = {
-  en: `${ASSETS_BASE}/en.json.gz`,
-  ru: `${ASSETS_BASE}/ru.json.gz`
+  en: `${DICT_BASE}/en.json.gz`,
+  ru: `${DICT_BASE}/ru.json.gz`
 };
 
-// Fallback: uncompressed dictionaries from assets branch
+// Fallback: uncompressed dictionaries
 const FILE_MAP: Record<Language, string> = {
-  en: `${ASSETS_BASE}/en.json`,
-  ru: `${ASSETS_BASE}/ru.json`
+  en: `${DICT_BASE}/en.json`,
+  ru: `${DICT_BASE}/ru.json`
 };
 
 // Strict Russian dictionary (nominative+plural only for nouns, base forms for others)
-const RU_STRICT_COMPRESSED = `${ASSETS_BASE}/ru-strict.json.gz`;
-const RU_STRICT_FILE = `${ASSETS_BASE}/ru-strict.json`;
+const RU_STRICT_COMPRESSED = `${STRICT_DICT_BASE}/ru-strict.json.gz`;
+const RU_STRICT_FILE = `${STRICT_DICT_BASE}/ru-strict.json`;
 
 // Legacy fallback: local bundled files
 const LEGACY_FILE_MAP: Record<Language, string> = {
@@ -66,6 +76,11 @@ const REMOTE_MAP: Record<Language, string> = {
 // Minimal word length (inclusive); users can adjust via UI.
 const DEFAULT_MIN_LENGTH = 2;
 let minLength = DEFAULT_MIN_LENGTH;
+
+function normalizeBaseUrl(value?: string) {
+  if (!value) return undefined;
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+}
 
 function normalize(word: string) {
   return word.trim().toUpperCase();

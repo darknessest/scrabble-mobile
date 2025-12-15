@@ -65,6 +65,11 @@ Local Scripts → Process → Compress → Push to assets branch → CDN → Cli
    - Run "Generate Dictionaries" workflow manually
    - Or wait for scheduled run (weekly on Mondays)
 
+#### Dev Server Convenience
+
+- `npm run dev` now bootstraps real dictionaries automatically for local use by downloading compressed assets into `.dev-assets/` and serving them at `/dev-dicts`.
+- Tiny mock dictionaries (English, Russian, and RU strict) are also generated and served at `/dev-dicts-mock` for fast testing. Enable them by setting `VITE_USE_DICT_MOCKS=true` when starting the dev server.
+
 #### Automatic Updates
 
 The GitHub Actions workflow (`.github/workflows/dictionaries.yml`) automatically:
