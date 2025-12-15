@@ -271,11 +271,11 @@ function fixedPrefixBeforeAnchor(
 }
 
 function traverseFixedPrefix(root: TrieNode, fixed: number[]): TrieNode | null {
-  let node: TrieNode | null = root;
+  let node: TrieNode = root;
   for (const idx of fixed) {
-    const next = node.children.get(idx);
-    if (!next) return null;
-    node = next;
+    const nextNode = node.children.get(idx);
+    if (!nextNode) return null;
+    node = nextNode;
   }
   return node;
 }
@@ -284,7 +284,6 @@ function hasAnyMoveRow(
   state: GameState,
   playerId: string,
   anchors: Anchor[],
-  boardIsEmpty: boolean,
   root: TrieNode,
   letterToIndex: Map<string, number>,
   crossMasksRow: bigint[][],
@@ -383,13 +382,6 @@ function hasAnyMoveRow(
       // that move will be found when scanning the leftmost newly placed tile as an anchor.
       if (inBounds(startX - 1) && board[y][startX - 1].tile) continue;
 
-      // First move safety (empty board): must cover center.
-      if (boardIsEmpty) {
-        // With empty board, fixedStartX is 7 and fixedLetters is empty.
-        // The word covers center iff startX <= 7 and it extends at least to 7.
-        // Since anchor is at (7,7), startX <= 7 always; extension happens via extendRight.
-      }
-
       // Reset per-start choice (counts are mutated in recursion).
       // We keep counts in a single array; recursion restores changes, so no full clone needed here.
       const blanks = initialBlanks;
@@ -404,7 +396,6 @@ function hasAnyMoveCol(
   state: GameState,
   playerId: string,
   anchors: Anchor[],
-  boardIsEmpty: boolean,
   root: TrieNode,
   letterToIndex: Map<string, number>,
   crossMasksCol: bigint[][],
@@ -510,7 +501,6 @@ function hasAnyValidMoveFast(
   state: GameState,
   playerId: string,
   anchors: Anchor[],
-  boardIsEmpty: boolean,
   root: TrieNode,
   letterToIndex: Map<string, number>,
   crossMasks: CrossMasks,
@@ -518,8 +508,8 @@ function hasAnyValidMoveFast(
   minLength: number
 ): boolean {
   // Try both orientations; early exit on the first found move.
-  if (hasAnyMoveRow(state, playerId, anchors, boardIsEmpty, root, letterToIndex, crossMasks.row, alphabetLen, minLength)) return true;
-  if (hasAnyMoveCol(state, playerId, anchors, boardIsEmpty, root, letterToIndex, crossMasks.col, alphabetLen, minLength)) return true;
+  if (hasAnyMoveRow(state, playerId, anchors, root, letterToIndex, crossMasks.row, alphabetLen, minLength)) return true;
+  if (hasAnyMoveCol(state, playerId, anchors, root, letterToIndex, crossMasks.col, alphabetLen, minLength)) return true;
   return false;
 }
 
@@ -558,18 +548,18 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
 
     let trieBuildMs: number | undefined;
     let root: TrieNode;
-    const cacheHit = Boolean(cached && cached.wordSetRef === wordSet);
-    if (!cacheHit) {
+    let cacheHit = false;
+    if (cached && cached.wordSetRef === wordSet) {
+      cacheHit = true;
+      root = cached.root;
+    } else {
       const tTrie0 = performance.now();
       root = buildTrie(wordSet, letterToIndex);
       trieBuildMs = performance.now() - tTrie0;
       trieCache[dictKey] = { root, alphabet, alphabetLen, letterToIndex, wordSetRef: wordSet };
-    } else {
-      root = cached.root;
     }
 
     const anchors = computeAnchors(req.state.board);
-    const boardIsEmpty = !boardHasAnyTiles(req.state.board);
     let boardTiles = 0;
     for (let y = 0; y < BOARD_SIZE; y += 1) {
       for (let x = 0; x < BOARD_SIZE; x += 1) {
@@ -587,7 +577,6 @@ async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
         req.state,
         playerId,
         anchors,
-        boardIsEmpty,
         root,
         letterToIndex,
         crossMasks,

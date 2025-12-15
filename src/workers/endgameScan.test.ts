@@ -51,7 +51,7 @@ describe('endgameScan (trie backtracking)', () => {
     const cross = __testing.computeCrossMasks(state.board, alphabet, letterToIndex, words, 2);
 
     const anchors = [{ x: 7, y: 7 }];
-    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, true, root, letterToIndex, cross, alphabet.length, 2);
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(true);
   });
 
@@ -67,7 +67,7 @@ describe('endgameScan (trie backtracking)', () => {
     const cross = __testing.computeCrossMasks(state.board, alphabet, letterToIndex, words, 2);
 
     const anchors = [{ x: 7, y: 7 }];
-    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, true, root, letterToIndex, cross, alphabet.length, 2);
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(false);
   });
 
@@ -86,7 +86,7 @@ describe('endgameScan (trie backtracking)', () => {
 
     // Anchor is the empty cell right of H.
     const anchors = [{ x: 8, y: 7 }];
-    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, false, root, letterToIndex, cross, alphabet.length, 2);
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(true);
   });
 
@@ -110,7 +110,7 @@ describe('endgameScan (trie backtracking)', () => {
     const cross = __testing.computeCrossMasks(state.board, alphabet, letterToIndex, words, 2);
 
     const anchors = [{ x: 7, y: 7 }];
-    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, false, root, letterToIndex, cross, alphabet.length, 2);
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(false);
   });
 
@@ -129,7 +129,7 @@ describe('endgameScan (trie backtracking)', () => {
     const cross = __testing.computeCrossMasks(state.board, alphabet, letterToIndex, words, 2);
 
     const anchors = [{ x: 8, y: 7 }];
-    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, false, root, letterToIndex, cross, alphabet.length, 2);
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(true);
   });
 });
