@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createHost, createClient } from './p2p';
 
 // Types for mocks
-type EventListener = (evt: any) => void;
+type EventListener = (evt: Event) => void;
 
 class MockEventTarget {
   listeners: Record<string, EventListener[]> = {};
@@ -17,15 +17,16 @@ class MockEventTarget {
     this.listeners[type] = this.listeners[type].filter((l) => l !== listener);
   }
 
-  dispatchEvent(event: { type: string; [key: string]: any }) {
+  dispatchEvent(event: { type: string;[key: string]: unknown }) {
     const listeners = this.listeners[event.type] || [];
+    // @ts-expect-error - Mock event handling
     listeners.forEach((l) => l(event));
-    
+
     // Call on<event> handler if it exists
     const handlerName = `on${event.type}`;
-    // @ts-ignore
+    // @ts-expect-error - dynamic handler access
     if (typeof this[handlerName] === 'function') {
-      // @ts-ignore
+      // @ts-expect-error - dynamic handler access
       this[handlerName](event);
     }
   }
@@ -34,18 +35,18 @@ class MockEventTarget {
 class MockRTCDataChannel extends MockEventTarget {
   label: string;
   readyState: 'connecting' | 'open' | 'closing' | 'closed' = 'connecting';
-  
-  onopen: ((ev: any) => void) | null = null;
-  onclose: ((ev: any) => void) | null = null;
-  onerror: ((ev: any) => void) | null = null;
-  onmessage: ((ev: any) => void) | null = null;
+
+  onopen: ((ev: Event) => void) | null = null;
+  onclose: ((ev: Event) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: Event) => void) | null = null;
 
   constructor(label: string) {
     super();
     this.label = label;
   }
 
-  send(_data: any) {
+  send(_data: string) {
     // No-op for mock, unless we want to simulate loopback
   }
 
@@ -65,22 +66,22 @@ class MockRTCPeerConnection extends MockEventTarget {
   iceGatheringState: 'new' | 'gathering' | 'complete' = 'new';
   connectionState: 'new' | 'checking' | 'connected' | 'failed' | 'disconnected' | 'closed' = 'new';
   iceConnectionState: 'new' | 'checking' | 'connected' | 'completed' | 'failed' | 'disconnected' | 'closed' = 'new';
-  localDescription: any = null;
-  remoteDescription: any = null;
+  localDescription: RTCSessionDescriptionInit | null = null;
+  remoteDescription: RTCSessionDescriptionInit | null = null;
 
-  onicegatheringstatechange: ((ev: any) => void) | null = null;
-  onconnectionstatechange: ((ev: any) => void) | null = null;
-  oniceconnectionstatechange: ((ev: any) => void) | null = null;
+  onicegatheringstatechange: ((ev: Event) => void) | null = null;
+  onconnectionstatechange: ((ev: Event) => void) | null = null;
+  oniceconnectionstatechange: ((ev: Event) => void) | null = null;
   ondatachannel: ((ev: { channel: MockRTCDataChannel }) => void) | null = null;
-  onicecandidate: ((ev: any) => void) | null = null;
+  onicecandidate: ((ev: Event) => void) | null = null;
 
   createdChannels: MockRTCDataChannel[] = [];
 
-  constructor(_config: any) {
+  constructor(_config: RTCConfiguration) {
     super();
   }
 
-  createDataChannel(label: string, _options?: any) {
+  createDataChannel(label: string, _options?: RTCDataChannelInit) {
     const channel = new MockRTCDataChannel(label);
     this.createdChannels.push(channel);
     return channel;
@@ -94,7 +95,7 @@ class MockRTCPeerConnection extends MockEventTarget {
     return { type: 'answer', sdp: 'mock-answer-sdp' };
   }
 
-  async setLocalDescription(desc: any) {
+  async setLocalDescription(desc: RTCSessionDescriptionInit) {
     this.localDescription = desc;
     // Simulate ICE gathering completing shortly after setting local description
     setTimeout(() => {
@@ -102,12 +103,12 @@ class MockRTCPeerConnection extends MockEventTarget {
       this.dispatchEvent({ type: 'icegatheringstatechange' });
       // Also signal end of candidates
       if (this.onicecandidate) {
-          this.onicecandidate({ candidate: null });
+        this.onicecandidate({} as Event);
       }
     }, 10);
   }
 
-  async setRemoteDescription(desc: any) {
+  async setRemoteDescription(desc: RTCSessionDescriptionInit) {
     this.remoteDescription = desc;
   }
 
@@ -119,9 +120,7 @@ class MockRTCPeerConnection extends MockEventTarget {
 
   // Helper for tests to simulate incoming data channel
   simulateDataChannel(channel: MockRTCDataChannel) {
-    // @ts-ignore
     if (this.ondatachannel) {
-      // @ts-ignore
       this.ondatachannel({ channel });
     }
   }
@@ -133,22 +132,22 @@ let createdPCs: MockRTCPeerConnection[] = [];
 describe('P2P Network', () => {
   beforeEach(() => {
     createdPCs = [];
-    // @ts-ignore
+    // @ts-expect-error - Mocking global RTCPeerConnection
     global.RTCPeerConnection = class extends MockRTCPeerConnection {
-      constructor(config: any) {
+      constructor(config: RTCConfiguration) {
         super(config);
         createdPCs.push(this);
       }
     };
-    // @ts-ignore
+    // @ts-expect-error - Mocking global RTCDataChannel
     global.RTCDataChannel = MockRTCDataChannel;
-    
+
     // Ensure btoa/atob if missing (Node environment usually has them now, but to be safe)
     if (!global.btoa) {
-        global.btoa = (str) => Buffer.from(str).toString('base64');
+      global.btoa = (str) => Buffer.from(str).toString('base64');
     }
     if (!global.atob) {
-        global.atob = (str) => Buffer.from(str, 'base64').toString('utf8');
+      global.atob = (str) => Buffer.from(str, 'base64').toString('utf8');
     }
   });
 
@@ -166,21 +165,21 @@ describe('P2P Network', () => {
 
     expect(createdPCs.length).toBe(1);
     const pc = createdPCs[0];
-    
+
     expect(pc.localDescription).toBeTruthy();
     expect(host.offer).toBeTruthy();
     // Offer should be base64 encoded JSON of the description
     const decoded = JSON.parse(atob(host.offer));
     expect(decoded.type).toBe('offer');
     expect(decoded.sdp).toBe('mock-offer-sdp');
-    
+
     expect(pc.createdChannels.length).toBe(1);
     expect(pc.createdChannels[0].label).toBe('scrabble-data');
   });
 
   it('Client accepts offer and creates answer', async () => {
     const callbacks = { onMessage: vi.fn() };
-    
+
     // Create a mock offer string
     const offerObj = { type: 'offer', sdp: 'mock-remote-sdp' };
     const offerStr = btoa(JSON.stringify(offerObj));
@@ -193,7 +192,7 @@ describe('P2P Network', () => {
     expect(pc.remoteDescription).toEqual(offerObj);
     expect(pc.localDescription).toBeTruthy();
     expect(client.answer).toBeTruthy();
-    
+
     const decodedAnswer = JSON.parse(atob(client.answer));
     expect(decodedAnswer.type).toBe('answer');
   });

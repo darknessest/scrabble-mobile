@@ -237,12 +237,19 @@ describe('ScrabbleGame', () => {
         expect(result.message).toContain('Invalid word');
     });
 
+    interface WordChecker {
+        (word: string): Promise<boolean>;
+        getAllWords?: () => Set<string>;
+    }
+
+    // ... existing code ...
+
     it('detects game end when bag is empty and no players have valid moves', async () => {
         game.start('en', ['p1', 'p2']);
         const state = game.getState();
         state.bag = [];
 
-        const checker = (async () => false) as any;
+        const checker: WordChecker = async () => false;
         checker.getAllWords = () => new Set<string>();
 
         const ended = await game.checkGameEnd(checker);

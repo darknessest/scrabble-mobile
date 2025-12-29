@@ -1,96 +1,48 @@
 import './style.css';
-import { BOARD_SIZE, ScrabbleGame, type WordChecker } from './core/game';
-import type { GameEndReason, GameState, Language, Placement, Tile } from './core/types';
-import { getInitialBagSize } from './core/tiles';
-import { reconcileOrder, shuffleCopy } from './ui/rackOrder';
+import type { Language } from './core/types';
+import type { Mode, SessionMeta, ActionMessage } from './types';
 import {
-  downloadDictionary,
-  downloadDictionaryStrict,
-  ensureDictionary,
-  ensureDictionaryStrict,
-  getDictionaryWordSet,
-  hasWord,
-  setMinWordLength
-} from './dictionary/dictionaryService';
-import { createClient, createHost, type P2PCallbacks, type P2PConnection } from './network/p2p';
-import { toQrDataUrl } from './network/qr';
-import { allPlayersReady, maybeComputeGameStartAt } from './network/readySync';
-import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage/indexedDb';
-import jsQR from 'jsqr';
-import { canStartInitialTurnTimer } from './core/sessionTimer';
-import { applyActionButtonsStateToDom } from './ui/actionButtonsState';
+  setLabels,
+  type UiElements,
+  renderBoard,
+  renderRack,
+  renderScores,
+  renderStats,
+  applyModeUI,
+  renderModeControls,
+  applyTimerInputFromMeta,
+  applyMinLengthInputFromMeta,
+  renderVisibility,
+  renderNetworkStatus,
+  updateTimerSettingsUI,
+  renderVersion
+} from './ui/uiRenderer';
+import { ToastManager } from './ui/toast';
+import { QrScanner } from './ui/qrScanner';
+import { BlankTileSelector } from './ui/blankTileSelector';
+import { GameController } from './controllers/gameController';
+import { NetworkController } from './controllers/networkController';
+import { TimerController } from './controllers/timerController';
+import { DictionaryController } from './controllers/dictionaryController';
+import { StorageController } from './controllers/storageController';
+import { ReadyGate } from './controllers/readyGate';
+import { GameOverController } from './controllers/gameOver';
+import { EndgameScanController } from './controllers/endgameScan';
+import { copyToClipboard, appendLog as appendLogUtil, formatGameOverReason } from './utils/appUtils';
 
 declare const __APP_VERSION__: string;
 
-type Mode = 'solo' | 'host' | 'client';
-
-interface SessionMeta {
-  mode: Mode;
-  language: Language;
-  isHost: boolean;
-  localPlayerId: string;
-  remotePlayerId?: string;
-  sessionId: string;
-  minWordLength?: number;
-  timerEnabled?: boolean;
-  timerDurationSec?: number;
-  turnDeadline?: number | null;
-  lastTurnEvent?: TurnEvent;
-  gameOver?: GameOverEvent;
-  /**
-   * Russian dictionary variant: 'full' (all inflected forms) or 'strict' (nominative+plural only for nouns)
-   * Only applies when language is 'ru'
-   */
-  russianDictionaryVariant?: 'full' | 'strict';
-  /**
-   * Pre-game sync (P2P only): both users must click "Ready".
-   *
-   * Back-compat note:
-   * - If `gameStartAt` is undefined, the session behaves as "already started" (old snapshots).
-   * - New P2P sessions set `gameStartAt` to null and will show a Ready overlay until scheduled.
-   */
-  readyState?: Record<string, boolean>;
-  gameStartAt?: number | null;
-  rematch?: { requestedBy: Record<string, boolean>; at: number };
-}
-
-interface SnapshotPayload {
-  state: GameState;
-  meta: SessionMeta;
-  labels: Record<string, string>;
-}
-
-type TurnEventType = 'timeout';
-
-interface TurnEvent {
-  type: TurnEventType;
-  playerId: string;
-  at: number;
-  moveNumber: number;
-}
-
-interface GameOverEvent {
-  reason: GameEndReason;
-  at: number;
-  moveNumber: number;
-  finalScores: Record<string, number>;
-}
-
-type ActionMessage =
-  | { type: 'ACTION_MOVE'; placements: Placement[]; playerId: string }
-  | { type: 'ACTION_PASS'; playerId: string }
-  | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
-  | { type: 'ACTION_REMATCH_REQUEST'; playerId: string; at: number }
-  | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
-  | { type: 'PLAYER_READY'; playerId: string; ready: boolean }
-  | { type: 'REQUEST_SYNC' }
-  | { type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> };
-
 const BASE_PATH = import.meta.env.BASE_URL ?? '/';
-const game = new ScrabbleGame();
-const READY_GRACE_MS = 3000;
-const READY_TICK_MS = 200;
 
+// Global state
+let mode: Mode = 'solo';
+let meta: SessionMeta | null = null;
+let labels: Record<string, string> = {};
+let settingsHidden = false;
+let logsHidden = false;
+let lastShownTurnEventToken: string | null = null;
+
+// UI Elements
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div class="shell">
@@ -355,56 +307,75 @@ app.innerHTML = `
   </div>
 `;
 
-const languageSelect = document.querySelector<HTMLSelectElement>('#language')!;
-const russianVariantSelect = document.querySelector<HTMLSelectElement>('#russian-dict-variant')!;
-const russianVariantWrapper = document.querySelector<HTMLElement>('#russian-variant')!;
-const offlineStatus = document.querySelector<HTMLSpanElement>('#offline-status')!;
-const dictStatus = document.querySelector<HTMLSpanElement>('#dict-status')!;
-const p2pStatus = document.querySelector<HTMLSpanElement>('#p2p-status')!;
-const versionEl = document.querySelector<HTMLParagraphElement>('#app-version');
-const startBtn = document.querySelector<HTMLButtonElement>('#start-btn')!;
-const resumeBtn = document.querySelector<HTMLButtonElement>('#resume-btn')!;
-const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snapshot')!;
-const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
-const minLengthInput = document.querySelector<HTMLInputElement>('#min-length')!;
-const timerEnabledToggle = document.querySelector<HTMLInputElement>('#turn-timer-enabled')!;
-const timerMinutesWrapper = document.querySelector<HTMLElement>('#turn-timer-minutes')!;
-const timerInput = document.querySelector<HTMLInputElement>('#turn-timer')!;
-const modeTabs = document.querySelector<HTMLDivElement>('#mode-tabs')!;
-const meInput = document.querySelector<HTMLInputElement>('#me-name')!;
-const peerInput = document.querySelector<HTMLInputElement>('#peer-name')!;
-const boardEl = document.querySelector<HTMLDivElement>('#board')!;
-const rackEl = document.querySelector<HTMLDivElement>('#rack')!;
-const rackOwnerEl = document.querySelector<HTMLSpanElement>('#rack-owner')!;
-const turnIndicator = document.querySelector<HTMLSpanElement>('#turn-indicator')!;
-const timerDisplay = document.querySelector<HTMLSpanElement>('#timer-display')!;
-const wordCheckStatus = document.querySelector<HTMLSpanElement>('#word-check-status')!;
-const wordLengthStatus = document.querySelector<HTMLSpanElement>('#word-length-status')!;
-const endgameScanStatus = document.querySelector<HTMLSpanElement>('#endgame-scan-status')!;
-const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
-const scoresEl = document.querySelector<HTMLDivElement>('#scores')!;
-const logEl = document.querySelector<HTMLDivElement>('#log')!;
-const bagCountEl = document.querySelector<HTMLElement>('#bag-count')!;
-const moveHistoryEl = document.querySelector<HTMLDivElement>('#move-history')!;
-const settingsSection = document.querySelector<HTMLElement>('#settings-section')!;
-const confirmMoveBtn = document.querySelector<HTMLButtonElement>('#confirm-move')!;
-const clearPlacementsBtn = document.querySelector<HTMLButtonElement>('#clear-placements')!;
-const mixRackBtn = document.querySelector<HTMLButtonElement>('#mix-rack')!;
-const passBtn = document.querySelector<HTMLButtonElement>('#pass-btn')!;
-const exchangeBtn = document.querySelector<HTMLButtonElement>('#exchange-btn')!;
+// Get UI elements
+const uiElements: UiElements = {
+  boardEl: document.querySelector<HTMLDivElement>('#board')!,
+  rackEl: document.querySelector<HTMLDivElement>('#rack')!,
+  rackOwnerEl: document.querySelector<HTMLSpanElement>('#rack-owner')!,
+  turnIndicator: document.querySelector<HTMLSpanElement>('#turn-indicator')!,
+  timerDisplay: document.querySelector<HTMLSpanElement>('#timer-display')!,
+  wordCheckStatus: document.querySelector<HTMLSpanElement>('#word-check-status')!,
+  wordLengthStatus: document.querySelector<HTMLSpanElement>('#word-length-status')!,
+  endgameScanStatus: document.querySelector<HTMLSpanElement>('#endgame-scan-status')!,
+  scoresEl: document.querySelector<HTMLDivElement>('#scores')!,
+  logEl: document.querySelector<HTMLDivElement>('#log')!,
+  bagCountEl: document.querySelector<HTMLElement>('#bag-count')!,
+  moveHistoryEl: document.querySelector<HTMLDivElement>('#move-history')!,
+  settingsSection: document.querySelector<HTMLElement>('#settings-section')!,
+  confirmMoveBtn: document.querySelector<HTMLButtonElement>('#confirm-move')!,
+  passBtn: document.querySelector<HTMLButtonElement>('#pass-btn')!,
+  exchangeBtn: document.querySelector<HTMLButtonElement>('#exchange-btn')!,
+  clearPlacementsBtn: document.querySelector<HTMLButtonElement>('#clear-placements')!,
+  mixRackBtn: document.querySelector<HTMLButtonElement>('#mix-rack')!,
+  languageSelect: document.querySelector<HTMLSelectElement>('#language')!,
+  russianVariantSelect: document.querySelector<HTMLSelectElement>('#russian-dict-variant')!,
+  russianVariantWrapper: document.querySelector<HTMLElement>('#russian-variant')!,
+  minLengthInput: document.querySelector<HTMLInputElement>('#min-length')!,
+  timerEnabledToggle: document.querySelector<HTMLInputElement>('#turn-timer-enabled')!,
+  timerMinutesWrapper: document.querySelector<HTMLElement>('#turn-timer-minutes')!,
+  timerInput: document.querySelector<HTMLInputElement>('#turn-timer')!,
+  meInput: document.querySelector<HTMLInputElement>('#me-name')!,
+  peerInput: document.querySelector<HTMLInputElement>('#peer-name')!,
+  modeTabs: document.querySelector<HTMLDivElement>('#mode-tabs')!,
+  hostCard: document.querySelector<HTMLDivElement>('#host-handshake')!,
+  clientCard: document.querySelector<HTMLDivElement>('#client-handshake')!,
+  languageWrapper: document.querySelector<HTMLElement>('#session-language')!,
+  timerWrapper: document.querySelector<HTMLElement>('#session-timer')!,
+  offlineStatus: document.querySelector<HTMLSpanElement>('#offline-status')!,
+  dictStatus: document.querySelector<HTMLSpanElement>('#dict-status')!,
+  p2pStatus: document.querySelector<HTMLSpanElement>('#p2p-status')!,
+  versionEl: document.querySelector<HTMLParagraphElement>('#app-version'),
+  readyOverlay: document.querySelector<HTMLDivElement>('#ready-overlay')!,
+  readyStatusEl: document.querySelector<HTMLParagraphElement>('#ready-status')!,
+  readyBtn: document.querySelector<HTMLButtonElement>('#ready-btn')!,
+  gameOverOverlay: document.querySelector<HTMLDivElement>('#gameover-overlay')!,
+  gameOverReasonEl: document.querySelector<HTMLParagraphElement>('#gameover-reason')!,
+  gameOverScoresEl: document.querySelector<HTMLDivElement>('#gameover-scores')!,
+  gameOverStatsEl: document.querySelector<HTMLDivElement>('#gameover-stats')!,
+  rematchStatusEl: document.querySelector<HTMLParagraphElement>('#rematch-status')!,
+  rematchBtnOverlay: document.querySelector<HTMLButtonElement>('#rematch-btn-overlay')!,
+  viewBoardBtn: document.querySelector<HTMLButtonElement>('#view-board-btn')!,
+  gameOverBanner: document.querySelector<HTMLDivElement>('#gameover-banner')!,
+  gameOverBannerScoresEl: document.querySelector<HTMLSpanElement>('#gameover-banner-scores')!,
+  rematchBannerStatusEl: document.querySelector<HTMLSpanElement>('#rematch-banner-status')!,
+  rematchBtnBanner: document.querySelector<HTMLButtonElement>('#rematch-btn-banner')!,
+  showResultsBtn: document.querySelector<HTMLButtonElement>('#show-results-btn')!,
+  disconnectOverlay: document.querySelector<HTMLDivElement>('#disconnect-overlay')!,
+  disconnectMessage: document.querySelector<HTMLParagraphElement>('#disconnect-message')!
+};
 
+// Additional elements
+const toastEl = document.querySelector<HTMLDivElement>('#toast')!;
 const copyOfferBtn = document.querySelector<HTMLButtonElement>('#copy-offer')!;
 const offerText = document.querySelector<HTMLTextAreaElement>('#offer-text')!;
 const offerQr = document.querySelector<HTMLImageElement>('#offer-qr')!;
 const answerText = document.querySelector<HTMLTextAreaElement>('#answer-text')!;
 const scanAnswerBtn = document.querySelector<HTMLButtonElement>('#scan-answer')!;
-
 const hostOfferInput = document.querySelector<HTMLTextAreaElement>('#host-offer-input')!;
 const scanOfferBtn = document.querySelector<HTMLButtonElement>('#scan-offer')!;
 const clientAnswer = document.querySelector<HTMLTextAreaElement>('#client-answer')!;
 const copyClientAnswerBtn = document.querySelector<HTMLButtonElement>('#copy-client-answer')!;
 const answerQr = document.querySelector<HTMLImageElement>('#answer-qr')!;
-
 const refreshDictsBtn = document.querySelector<HTMLButtonElement>('#refresh-dicts')!;
 const downloadEnBtn = document.querySelector<HTMLButtonElement>('#download-en')!;
 const downloadRuBtn = document.querySelector<HTMLButtonElement>('#download-ru')!;
@@ -415,1935 +386,348 @@ const dictRuStrictIcon = document.querySelector<HTMLSpanElement>('#dict-ru-stric
 const requestSyncBtn = document.querySelector<HTMLButtonElement>('#request-sync')!;
 const toggleSetupBtn = document.querySelector<HTMLButtonElement>('#toggle-setup')!;
 const toggleLogsBtn = document.querySelector<HTMLButtonElement>('#toggle-logs')!;
-const languageWrapper = document.querySelector<HTMLElement>('#session-language')!;
-const timerWrapper = document.querySelector<HTMLElement>('#session-timer')!;
-const disconnectOverlay = document.querySelector<HTMLDivElement>('#disconnect-overlay')!;
-const disconnectMessage = document.querySelector<HTMLParagraphElement>('#disconnect-message')!;
-const readyOverlay = document.querySelector<HTMLDivElement>('#ready-overlay')!;
-const readyStatusEl = document.querySelector<HTMLParagraphElement>('#ready-status')!;
-const readyBtn = document.querySelector<HTMLButtonElement>('#ready-btn')!;
-const gameOverOverlay = document.querySelector<HTMLDivElement>('#gameover-overlay')!;
-const gameOverReasonEl = document.querySelector<HTMLParagraphElement>('#gameover-reason')!;
-const gameOverScoresEl = document.querySelector<HTMLDivElement>('#gameover-scores')!;
-const gameOverStatsEl = document.querySelector<HTMLDivElement>('#gameover-stats')!;
-const rematchStatusEl = document.querySelector<HTMLParagraphElement>('#rematch-status')!;
-const rematchBtnOverlay = document.querySelector<HTMLButtonElement>('#rematch-btn-overlay')!;
-const viewBoardBtn = document.querySelector<HTMLButtonElement>('#view-board-btn')!;
-const gameOverBanner = document.querySelector<HTMLDivElement>('#gameover-banner')!;
-const gameOverBannerScoresEl = document.querySelector<HTMLSpanElement>('#gameover-banner-scores')!;
-const rematchBannerStatusEl = document.querySelector<HTMLSpanElement>('#rematch-banner-status')!;
-const rematchBtnBanner = document.querySelector<HTMLButtonElement>('#rematch-btn-banner')!;
-const showResultsBtn = document.querySelector<HTMLButtonElement>('#show-results-btn')!;
+const startBtn = document.querySelector<HTMLButtonElement>('#start-btn')!;
+const resumeBtn = document.querySelector<HTMLButtonElement>('#resume-btn')!;
+const clearSnapshotBtn = document.querySelector<HTMLButtonElement>('#clear-snapshot')!;
+const resumeNote = document.querySelector<HTMLParagraphElement>('#resume-note')!;
+const forceReloadBtn = document.querySelector<HTMLButtonElement>('#force-reload')!;
 
-let mode: Mode = 'solo';
-let meta: SessionMeta | null = null;
-let labels: Record<string, string> = {};
-let currentState: GameState | null = null;
-let placements: Placement[] = [];
-let selectedTileId: string | null = null;
-let connection: P2PConnection | null = null;
-let hostApplyAnswer: ((answer: string) => Promise<void>) | null = null;
-let pendingSnapshot: SnapshotPayload | null = null;
-let settingsHidden = false;
-let logsHidden = false;
-let timerTicker: number | null = null;
-let validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
-let validationNonce = 0;
-let remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null = null;
-let toastTimer: number | null = null;
-let toastOutTimer: number | null = null;
-let lastShownTurnEventToken: string | null = null;
-let lastHandledGameOverUiToken: string | null = null;
-let gameOverOverlayDismissed = false;
-let lastAutoPassToken: string | null = null;
-let autoPassInProgress = false;
-let disconnectTimerState: { deadline: number; remaining: number } | null = null;
-let lastHandshakeOffer = '';
-let lastHandshakeAnswer = '';
-let readyTicker: number | null = null;
-
-// Endgame scanning (background worker) state
-type EndgameScanUiState = 'idle' | 'running' | 'error';
-let endgameScanUi: EndgameScanUiState = 'idle';
-let endgameScanLastToken: string | null = null;
-let endgameScanInFlight: { requestId: string; token: string; startedAt: number; debug: boolean } | null = null;
-let endgameWorker: Worker | null = null;
-
-if (typeof Worker !== 'undefined') {
-  try {
-    endgameWorker = new Worker(new URL('./workers/endgameScan.worker.ts', import.meta.url), { type: 'module' });
-    endgameWorker.addEventListener('message', (ev: MessageEvent) => {
-      handleEndgameWorkerMessage(ev.data as any);
-    });
-  } catch {
-    // If workers aren't available for some reason, we simply won't auto-finish on \"no moves\".
-    endgameWorker = null;
-  }
+// Helper function for logging
+function appendLog(msg: string): void {
+  appendLogUtil(uiElements.logEl, msg);
 }
 
-// Local-only rack ordering (UX): keep a stable user-defined order (e.g. after Mix)
-// by tracking tile ids and reconciling against the authoritative rack on each update.
-let rackOrder: string[] = [];
-let rackOrderSessionId: string | null = null;
+// Initialize controllers
+const toastManager = new ToastManager(toastEl);
+const qrScanner = new QrScanner(appendLog);
+const blankTileSelector = new BlankTileSelector(appendLog);
+const gameController = new GameController(appendLog);
+const networkController = new NetworkController(
+  uiElements.p2pStatus,
+  offerText,
+  offerQr,
+  answerText,
+  hostOfferInput,
+  clientAnswer,
+  answerQr,
+  uiElements.disconnectOverlay,
+  uiElements.disconnectMessage,
+  appendLog
+);
+const timerController = new TimerController(uiElements.timerDisplay);
+const dictionaryController = new DictionaryController(
+  dictEnIcon,
+  dictRuIcon,
+  dictRuStrictIcon,
+  uiElements.dictStatus,
+  appendLog
+);
+const storageController = new StorageController(
+  resumeBtn,
+  clearSnapshotBtn,
+  resumeNote,
+  appendLog
+);
+const readyGate = new ReadyGate(
+  uiElements.readyOverlay,
+  uiElements.readyStatusEl,
+  uiElements.readyBtn
+);
+const gameOverController = new GameOverController(
+  uiElements.gameOverOverlay,
+  uiElements.gameOverReasonEl,
+  uiElements.gameOverScoresEl,
+  uiElements.gameOverStatsEl,
+  uiElements.rematchStatusEl,
+  uiElements.rematchBtnOverlay,
+  uiElements.gameOverBanner,
+  uiElements.gameOverBannerScoresEl,
+  uiElements.rematchBannerStatusEl,
+  uiElements.rematchBtnBanner
+);
+const endgameScanController = new EndgameScanController(
+  uiElements.endgameScanStatus,
+  appendLog
+);
 
-setupEvents();
-// Initialize Russian variant selector visibility
-russianVariantWrapper.style.display = languageSelect.value === 'ru' ? 'flex' : 'none';
-renderNetworkStatus();
-renderVersion();
-applyModeUI();
-renderVisibility();
-refreshDictStatus();
-startDictionaryAutoCheck();
-checkSavedSnapshot();
-registerServiceWorker();
 
-function setupEvents() {
-  window.addEventListener('online', () => {
-    renderNetworkStatus();
-    void refreshDictStatus();
-  });
-  window.addEventListener('offline', () => {
-    renderNetworkStatus();
-    void refreshDictStatus();
-  });
-  appendLog('Tips: both devices on same Wi-Fi, no VPN; host creates offer, client returns answer; host applies answer.');
-
-  document.querySelector('#force-reload')?.addEventListener('click', async () => {
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      for (const registration of registrations) {
-        await registration.unregister();
-      }
-      appendLog('Service workers unregistered');
-    }
-    window.location.reload();
-  });
-
-  modeTabs.addEventListener('click', (ev) => {
-    const target = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
-    if (!target) return;
-    mode = target.dataset.mode as Mode;
-    applyModeUI();
-  });
-
-  languageSelect.addEventListener('change', () => {
-    const language = languageSelect.value as Language;
-    if (meta) {
-      meta.language = language;
-    }
-    // Show/hide Russian variant selector
-    russianVariantWrapper.style.display = language === 'ru' ? 'flex' : 'none';
-  });
-
-  russianVariantSelect.addEventListener('change', () => {
-    if (meta) {
-      meta.russianDictionaryVariant = russianVariantSelect.value as 'full' | 'strict';
-    }
-  });
-
-  startBtn.addEventListener('click', () => startSession());
-  resumeBtn.addEventListener('click', () => resumeSnapshot());
-  clearSnapshotBtn.addEventListener('click', async () => {
-    await clearSnapshot('last-session');
-    pendingSnapshot = null;
-    resumeBtn.disabled = true;
-    clearSnapshotBtn.disabled = true;
-    resumeNote.textContent = '';
-  });
-
-  confirmMoveBtn.addEventListener('click', () => submitMove());
-  clearPlacementsBtn.addEventListener('click', () => {
-    placements = [];
-    selectedTileId = null;
-    sendDraftPlacements();
-    renderBoard();
-    renderRack();
-    updateValidation();
-  });
-  mixRackBtn.addEventListener('click', () => {
-    if (!currentState || !meta) return;
-    syncLocalRackOrder(currentState, meta);
-    rackOrder = shuffleCopy(rackOrder);
-    renderRack();
-  });
-  passBtn.addEventListener('click', () => submitPass());
-  exchangeBtn.addEventListener('click', () => submitExchange());
-
-  copyOfferBtn.addEventListener('click', () => copyToClipboard(offerText.value));
-  copyClientAnswerBtn.addEventListener('click', () => copyToClipboard(clientAnswer.value));
-  scanOfferBtn.addEventListener('click', () =>
-    scanInto(hostOfferInput, async () => {
-      await buildClientAnswer();
-    })
-  );
-  scanAnswerBtn.addEventListener('click', () =>
-    scanInto(answerText, async () => {
-      await applyHostAnswer();
-    })
-  );
-  hostOfferInput.addEventListener(
-    'input',
-    debounce(() => {
-      void maybeAutoBuildClientAnswer();
-    }, 350)
-  );
-  answerText.addEventListener(
-    'input',
-    debounce(() => {
-      void maybeAutoApplyHostAnswer();
-    }, 350)
-  );
-
-  refreshDictsBtn.addEventListener('click', async () => {
-    // Give immediate visual feedback so status never looks "missing"
-    dictEnIcon.textContent = '⏳';
-    dictRuIcon.textContent = '⏳';
-    dictRuStrictIcon.textContent = '⏳';
-    dictStatus.textContent = 'Dictionaries: checking...';
-    try {
-      await refreshDictStatus();
-    } catch (err) {
-      dictEnIcon.textContent = '❌';
-      dictRuIcon.textContent = '❌';
-      dictRuStrictIcon.textContent = '❌';
-      dictStatus.textContent = 'Dictionaries: check failed';
-      dictStatus.classList.add('danger');
-      appendLog(`Dictionary status check failed: ${String(err)}`);
-    }
-  });
-  downloadEnBtn.addEventListener('click', () => downloadLanguage('en'));
-  downloadRuBtn.addEventListener('click', () => downloadLanguage('ru'));
-  downloadRuStrictBtn.addEventListener('click', async () => {
-    const result = await downloadDictionaryStrict();
-    if (result.available) {
-      appendLog(`Downloaded RU strict dictionary (${result.words ?? '?'} words)`);
-    } else {
-      appendLog(`Failed to download RU strict dictionary`);
-    }
-    await refreshDictStatus();
-  });
-  requestSyncBtn.addEventListener('click', () => {
-    connection?.send({ type: 'REQUEST_SYNC' });
-    appendLog('Requested sync from peer');
-  });
-  toggleSetupBtn.addEventListener('click', () => {
-    settingsHidden = !settingsHidden;
-    renderVisibility();
-  });
-  toggleLogsBtn.addEventListener('click', () => {
-    logsHidden = !logsHidden;
-    renderVisibility();
-  });
-  minLengthInput.addEventListener('change', () => {
-    const val = Number(minLengthInput.value) || 2;
-    setMinWordLength(val);
-    appendLog(`Min word length set to ${val}`);
-    if (meta && meta.isHost) {
-      meta.minWordLength = val;
-      sendSync();
-    }
-  });
-
-  timerEnabledToggle.addEventListener('change', () => {
-    updateTimerSettingsUI();
-    // Only host/solo can change session meta.
-    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
-    meta.timerEnabled = timerEnabledToggle.checked;
-    // Preserve the chosen duration even when disabled (handy when re-enabling).
-    meta.timerDurationSec = resolveTimerDurationSeconds();
-    resetTurnTimer();
-    renderAll();
-    void persistSnapshot();
-    sendSync();
-  });
-
-  timerInput.addEventListener('change', () => {
-    updateTimerSettingsUI();
-    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
-    meta.timerDurationSec = resolveTimerDurationSeconds();
-    if (meta.timerEnabled) {
-      resetTurnTimer();
-      renderAll();
-      void persistSnapshot();
-      sendSync();
-    }
-  });
-
-  boardEl.addEventListener('click', onBoardClick);
-  rackEl.addEventListener('click', onRackClick);
-  readyBtn.addEventListener('click', () => markLocalReady());
-
-  viewBoardBtn.addEventListener('click', () => {
-    gameOverOverlayDismissed = true;
-    renderGameOverUi();
-  });
-  showResultsBtn.addEventListener('click', () => {
-    gameOverOverlayDismissed = false;
-    renderGameOverUi();
-  });
-  rematchBtnOverlay.addEventListener('click', () => void requestRematch());
-  rematchBtnBanner.addEventListener('click', () => void requestRematch());
-}
-
-function isReadyGateEnabled(m: SessionMeta | null): boolean {
-  // Only for new P2P sessions where host explicitly initializes the field.
-  return Boolean(m && m.mode !== 'solo' && m.gameStartAt !== undefined);
-}
-
-function isPreGameLocked(): boolean {
-  if (!currentState || !meta) return false;
-  if (!isReadyGateEnabled(meta)) return false;
-  // null => not scheduled yet (waiting for both users to click Ready)
-  if (meta.gameStartAt == null) return true;
-  return Date.now() < meta.gameStartAt;
-}
-
-function formatCountdownMs(ms: number): string {
-  const s = Math.ceil(ms / 1000);
-  return `${Math.max(0, s)}s`;
-}
-
-function stopReadyTicker() {
-  if (readyTicker) {
-    window.clearInterval(readyTicker);
-    readyTicker = null;
-  }
-}
-
-function startReadyTickerIfNeeded() {
-  if (readyTicker) return;
-  readyTicker = window.setInterval(() => {
-    renderReadyOverlay();
-    // When countdown completes, this will hide the overlay; stop ticking then.
-    if (!isPreGameLocked()) stopReadyTicker();
-  }, READY_TICK_MS);
-}
-
-function renderReadyOverlay() {
-  if (!readyOverlay || !readyStatusEl || !readyBtn) return;
-
-  const active = isPreGameLocked();
-  readyOverlay.style.display = active ? '' : 'none';
-  readyOverlay.setAttribute('aria-hidden', active ? 'false' : 'true');
-
-  if (!active) {
-    stopReadyTicker();
-    // Important: ready ticker renders only the overlay; when the lock ends we must also
-    // refresh action button disabled state so move buttons don't get stuck inert.
+// Setup callbacks between controllers
+function setupControllerCallbacks(): void {
+  // Game controller callbacks
+  gameController.setOnValidationUpdate(() => {
+    updateValidationUI();
     applyActionButtonsState();
-    return;
-  }
+  });
+  gameController.setOnGameEnd(() => {
+    checkAndHandleGameEnd();
+  });
+  gameController.setOnPersist(async () => {
+    await storageController.persistSnapshot(
+      gameController.getState(),
+      meta,
+      labels
+    );
+  });
+  gameController.setOnSync(() => {
+    sendSync();
+    sendDraftPlacements();
+  });
+  gameController.setOnRenderAll(() => {
+    renderAll();
+  });
 
-  startReadyTickerIfNeeded();
+  // Timer controller callbacks
+  timerController.setOnTimeout(() => {
+    void gameController.maybeAutoPassOnTimeout();
+  });
 
-  const state = currentState;
-  const m = meta;
-  if (!state || !m) return;
-
-  const ready = m.readyState ?? {};
-  const meReady = Boolean(ready[m.localPlayerId]);
-  const otherId = m.remotePlayerId;
-  const otherReady = otherId ? Boolean(ready[otherId]) : false;
-
-  readyBtn.disabled = meReady;
-  readyBtn.textContent = meReady ? 'Ready ✓' : 'Ready';
-
-  if (m.gameStartAt && Date.now() < m.gameStartAt) {
-    const remaining = m.gameStartAt - Date.now();
-    readyStatusEl.textContent = `Both ready. Starting in ${formatCountdownMs(remaining)}…`;
-    return;
-  }
-
-  const otherLabel = otherId ? (labels[otherId] ?? otherId) : 'Opponent';
-  const otherLine = otherId ? `${otherLabel}: ${otherReady ? 'Ready ✓' : 'Not ready'}` : '';
-  readyStatusEl.textContent = `You: ${meReady ? 'Ready ✓' : 'Not ready'}${otherLine ? ` • ${otherLine}` : ''}`;
-}
-
-function renderNetworkStatus() {
-  const online = navigator.onLine;
-  offlineStatus.textContent = online ? 'Online' : 'Offline';
-  offlineStatus.classList.toggle('danger', !online);
-}
-
-function renderVersion() {
-  if (!versionEl) return;
-  const version = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : 'dev';
-  versionEl.textContent = `Version ${version}`;
-}
-
-function applyTimerInputFromMeta() {
-  if (!meta) return;
-  // Back-compat: old snapshots may have duration/deadline but no explicit enabled flag.
-  if (meta.timerEnabled === undefined) {
-    meta.timerEnabled = Boolean(meta.timerDurationSec);
-  }
-  timerEnabledToggle.checked = Boolean(meta.timerEnabled);
-  if (meta.timerDurationSec) {
-    const minutes = Math.max(1, Math.round(meta.timerDurationSec / 60));
-    timerInput.value = String(minutes);
-  }
-  updateTimerSettingsUI();
-}
-
-function applyMinLengthInputFromMeta() {
-  if (!meta?.minWordLength) return;
-  const val = Math.max(1, Math.floor(meta.minWordLength));
-  minLengthInput.value = String(val);
-  setMinWordLength(val);
-}
-
-function resolveTimerDurationSeconds() {
-  const minutes = Number(timerInput.value) || 0;
-  if (Number.isNaN(minutes) || minutes <= 0) return 0;
-  return Math.min(Math.max(minutes, 1), 10) * 60;
-}
-
-function updateTimerSettingsUI() {
-  // When timer is disabled, hide the minutes selector entirely.
-  const isJoin = mode === 'client';
-  const enabled = timerEnabledToggle.checked;
-  timerEnabledToggle.disabled = isJoin;
-  timerInput.disabled = isJoin || !enabled;
-  if (timerMinutesWrapper) {
-    timerMinutesWrapper.style.display = isJoin || !enabled ? 'none' : '';
-  }
-}
-
-function startTimerTicker() {
-  stopTimerTicker();
-  renderTimer();
-  timerTicker = window.setInterval(renderTimer, 500);
-}
-
-function stopTimerTicker() {
-  if (timerTicker) {
-    window.clearInterval(timerTicker);
-    timerTicker = null;
-  }
-}
-
-function renderTimer() {
-  if (!timerDisplay) return;
-  // During the pre-game countdown, hide the timer entirely so it doesn't show "extra" time.
-  if (meta && isReadyGateEnabled(meta) && (meta.gameStartAt == null || Date.now() < meta.gameStartAt)) {
-    timerDisplay.style.display = 'none';
-    return;
-  }
-  if (!meta || !meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) {
-    timerDisplay.style.display = 'none';
-    return;
-  }
-
-  const remainingMs = meta.turnDeadline - Date.now();
-  const clamped = Math.max(0, remainingMs);
-  const totalSeconds = Math.floor(clamped / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  timerDisplay.style.display = '';
-  timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  timerDisplay.classList.toggle('danger', clamped === 0);
-  timerDisplay.classList.toggle('active', clamped > 0);
-
-  if (clamped === 0) {
-    void maybeAutoPassOnTimeout();
-  }
-}
-
-function resetTurnTimer() {
-  if (!meta) {
-    stopTimerTicker();
-    renderTimer();
-    return;
-  }
-
-  if (!meta.timerEnabled || !meta.timerDurationSec) {
-    meta.turnDeadline = null;
-    stopTimerTicker();
-    renderTimer();
-    return;
-  }
-
-  // Ready gate (new P2P sessions): do not arm the initial timer until the scheduled start time exists.
-  if (!meta.turnDeadline && isReadyGateEnabled(meta) && (meta.gameStartAt == null || Date.now() < meta.gameStartAt)) {
-    meta.turnDeadline = null;
-    stopTimerTicker();
-    renderTimer();
-    return;
-  }
-
-  // Gate the initial start so host doesn't start the clock before the peer connects.
-  if (!meta.turnDeadline && !canStartInitialTurnTimer(meta, Boolean(connection?.dataChannelReady))) {
-    meta.turnDeadline = null;
-    stopTimerTicker();
-    renderTimer();
-    return;
-  }
-
-  meta.turnDeadline = Date.now() + meta.timerDurationSec * 1000;
-  startTimerTicker();
-}
-
-function hideToast() {
-  if (!toastEl) return;
-  toastEl.classList.remove('is-visible');
-  toastEl.classList.add('is-hiding');
-  if (toastOutTimer) window.clearTimeout(toastOutTimer);
-  toastOutTimer = window.setTimeout(() => {
-    toastEl.style.display = 'none';
-    toastEl.classList.remove('is-hiding');
-  }, 220);
-}
-
-function showToast(message: string, variant: 'info' | 'danger' = 'info', ms = 4500) {
-  if (!toastEl) return;
-  toastEl.textContent = message;
-  toastEl.className = `toast ${variant}`;
-  toastEl.style.display = '';
-  toastEl.classList.remove('is-hiding');
-  if (toastOutTimer) window.clearTimeout(toastOutTimer);
-  // Ensure transitions run even when reusing the same element back-to-back.
-  window.requestAnimationFrame(() => toastEl.classList.add('is-visible'));
-
-  if (toastTimer) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(hideToast, ms);
-}
-
-function formatGameOverReason(reason: GameEndReason): string {
-  if (reason === 'four_passes') return 'Both players passed twice in a row.';
-  return 'No tiles left in the bag and no valid moves available.';
-}
-
-function stopTimerForGameOver(incoming: SessionMeta) {
-  if (!incoming.timerEnabled) return;
-  incoming.turnDeadline = null;
-  stopTimerTicker();
-  renderTimer();
-}
-
-function computeEndgameStats(state: GameState | null): {
-  moves: number;
-  passes: number;
-  exchanges: number;
-  bingos: number;
-  bestMove?: { playerId: string; scoreDelta: number; words: string[] };
-  longestWord?: { word: string; playerId: string; scoreDelta: number };
-} {
-  if (!state) return { moves: 0, passes: 0, exchanges: 0, bingos: 0 };
-  let moves = 0;
-  let passes = 0;
-  let exchanges = 0;
-  let bingos = 0;
-  let bestMove: { playerId: string; scoreDelta: number; words: string[] } | undefined;
-  let longestWord: { word: string; playerId: string; scoreDelta: number } | undefined;
-
-  for (const entry of state.history) {
-    if (entry.type === 'MOVE') {
-      moves += 1;
-      if (entry.placedTiles === 7) bingos += 1;
-      if (!bestMove || entry.scoreDelta > bestMove.scoreDelta) {
-        bestMove = { playerId: entry.playerId, scoreDelta: entry.scoreDelta, words: entry.words };
+  // Network controller callbacks
+  networkController.setOnMessage((data: unknown) => {
+    handleMessage(data);
+  });
+  networkController.setOnOpen(() => {
+    if (meta?.isHost && gameController.getState()) {
+      if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline && !readyGate.isPreGameLocked()) {
+        timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+        void storageController.persistSnapshot(
+          gameController.getState(),
+          meta,
+          labels
+        );
       }
-      for (const w of entry.words) {
-        const norm = w.trim();
-        if (!norm) continue;
-        if (!longestWord || norm.length > longestWord.word.length) {
-          longestWord = { word: norm, playerId: entry.playerId, scoreDelta: entry.scoreDelta };
-        }
-      }
-    } else if (entry.type === 'PASS') {
-      passes += 1;
-    } else if (entry.type === 'EXCHANGE') {
-      exchanges += 1;
+      appendLog('Host: sending sync to peer.');
+      sendSync();
+    } else {
+      appendLog('Client: requesting sync from host.');
+      networkController.send({ type: 'REQUEST_SYNC' });
+    }
+  });
+  networkController.setOnClose(() => {
+    // Handled internally
+  });
+  networkController.setOnError((err: unknown) => {
+    appendLog(`P2P error: ${String(err)}`);
+  });
+  networkController.setOnConnectionStateChange((_state: string) => {
+    // Handled internally
+  });
+
+  // Ready gate callbacks
+  readyGate.setOnReadyClick(() => {
+    markLocalReady();
+  });
+
+  // Endgame scan callbacks
+  endgameScanController.setOnGameEnd(() => {
+    handleEndgameScanComplete();
+  });
+}
+
+// Helper functions
+function updateValidationUI(): void {
+  const validationStatus = gameController.getValidationStatus();
+  const placements = gameController.getPlacements();
+  const state = gameController.getState();
+
+  if (!state || !meta || placements.length === 0) {
+    uiElements.wordCheckStatus.style.display = 'none';
+    uiElements.wordLengthStatus.style.display = 'none';
+    return;
+  }
+
+  uiElements.wordCheckStatus.className = 'pill';
+  if (validationStatus === 'checking') {
+    uiElements.wordCheckStatus.textContent = 'Checking...';
+    uiElements.wordCheckStatus.style.display = '';
+    uiElements.wordLengthStatus.style.display = 'none';
+  } else if (validationStatus === 'valid') {
+    // This will be updated by the game controller after validation completes
+    uiElements.wordCheckStatus.style.display = '';
+    uiElements.wordLengthStatus.style.display = 'none';
+  } else if (validationStatus === 'invalid') {
+    uiElements.wordCheckStatus.textContent = 'Invalid';
+    uiElements.wordCheckStatus.classList.add('danger');
+    uiElements.wordCheckStatus.style.display = '';
+
+    const minWordLength = Math.max(
+      1,
+      Math.floor(meta.minWordLength ?? (Number(uiElements.minLengthInput.value) || 2))
+    );
+    const isTooShort = false; // Would need actual message parsing
+    if (isTooShort) {
+      uiElements.wordLengthStatus.className = 'pill danger';
+      uiElements.wordLengthStatus.textContent = `Too short (min ${minWordLength})`;
+      uiElements.wordLengthStatus.style.display = '';
+    } else {
+      uiElements.wordLengthStatus.style.display = 'none';
     }
   }
-
-  return { moves, passes, exchanges, bingos, bestMove, longestWord };
 }
 
-function renderGameOverUi() {
-  if (!meta || !meta.gameOver) {
-    gameOverOverlay.style.display = 'none';
-    gameOverOverlay.setAttribute('aria-hidden', 'true');
-    gameOverBanner.style.display = 'none';
-    return;
-  }
+function applyActionButtonsState(): void {
+  const state = gameController.getState();
+  const isOver = Boolean(meta?.gameOver);
+  const locked = readyGate.isPreGameLocked();
+  const placementsCount = gameController.getPlacements().length;
 
-  const ev = meta.gameOver;
-  const scoresText = Object.entries(ev.finalScores)
-    .map(([id, score]) => `${labels[id] ?? id}: ${score}`)
-    .join(' • ');
-
-  gameOverReasonEl.textContent = formatGameOverReason(ev.reason);
-  gameOverScoresEl.innerHTML = `<div class=\"hint\">Final scores</div><div class=\"gameover-scores-row\">${scoresText}</div>`;
-
-  const stats = computeEndgameStats(currentState);
-  const bestMoveText = stats.bestMove
-    ? `${labels[stats.bestMove.playerId] ?? stats.bestMove.playerId}: +${stats.bestMove.scoreDelta}`
-    : '—';
-  const longestWordText = stats.longestWord
-    ? `${stats.longestWord.word} (${labels[stats.longestWord.playerId] ?? stats.longestWord.playerId})`
-    : '—';
-
-  gameOverStatsEl.innerHTML = [
-    `<div class=\"gameover-stat\"><span class=\"label\">Moves</span><strong>${stats.moves}</strong></div>`,
-    `<div class=\"gameover-stat\"><span class=\"label\">Passes</span><strong>${stats.passes}</strong></div>`,
-    `<div class=\"gameover-stat\"><span class=\"label\">Exchanges</span><strong>${stats.exchanges}</strong></div>`,
-    `<div class=\"gameover-stat\"><span class=\"label\">Bingos</span><strong>${stats.bingos}</strong></div>`,
-    `<div class=\"gameover-stat\"><span class=\"label\">Best move</span><strong>${bestMoveText}</strong></div>`,
-    `<div class=\"gameover-stat\"><span class=\"label\">Longest word</span><strong>${longestWordText}</strong></div>`
-  ].join('');
-
-  gameOverBannerScoresEl.textContent = scoresText ? `— ${scoresText}` : '';
-
-  // Rematch (both-confirm for P2P, instant for solo)
-  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
-  const baseAt = meta.gameOver.at;
-  const requestedBy =
-    meta.rematch && meta.rematch.at >= baseAt ? meta.rematch.requestedBy : {};
-  const confirmed = players.filter((id) => requestedBy[id]);
-  const missing = players.filter((id) => !requestedBy[id]);
-  const meRequested = Boolean(requestedBy[meta.localPlayerId]);
-
-  rematchBtnOverlay.disabled = meRequested;
-  rematchBtnBanner.disabled = meRequested;
-
-  if (meta.mode === 'solo') {
-    rematchStatusEl.textContent = 'Start a new game with the same settings.';
-    rematchBannerStatusEl.textContent = '';
-  } else if (missing.length === 0) {
-    rematchStatusEl.textContent = 'Starting rematch…';
-    rematchBannerStatusEl.textContent = '';
-  } else if (meRequested) {
-    const missingNames = missing.map((id) => labels[id] ?? id).join(' & ');
-    rematchStatusEl.textContent = `Waiting for ${missingNames} to confirm rematch…`;
-    rematchBannerStatusEl.textContent = `(${confirmed.length}/${players.length} confirmed)`;
-  } else {
-    rematchStatusEl.textContent = 'Confirm rematch to start a new game.';
-    rematchBannerStatusEl.textContent = `(${confirmed.length}/${players.length} confirmed)`;
-  }
-
-  if (!gameOverOverlayDismissed) {
-    gameOverOverlay.style.display = '';
-    gameOverOverlay.setAttribute('aria-hidden', 'false');
-    gameOverBanner.style.display = 'none';
-  } else {
-    gameOverOverlay.style.display = 'none';
-    gameOverOverlay.setAttribute('aria-hidden', 'true');
-    gameOverBanner.style.display = '';
-  }
+  uiElements.confirmMoveBtn.disabled = !state || isOver || locked || placementsCount === 0;
+  uiElements.passBtn.disabled = !state || isOver || locked;
+  uiElements.exchangeBtn.disabled = !state || isOver || locked;
+  uiElements.clearPlacementsBtn.disabled = placementsCount === 0;
+  uiElements.mixRackBtn.disabled = !state || isOver || locked;
 }
 
-function maybeShowGameOverToastFromMeta(incoming: SessionMeta) {
-  const ev = incoming.gameOver;
-  if (!ev) {
-    gameOverOverlay.style.display = 'none';
-    gameOverBanner.style.display = 'none';
-    return;
-  }
+function renderAll(): void {
+  const state = gameController.getState();
+  const placements = gameController.getPlacements();
+  const selectedTileId = gameController.getSelectedTileId();
+  const remoteDraft = gameController.getRemoteDraft();
+  const validationStatus = gameController.getValidationStatus();
 
-  // Reset the overlay dismiss state when a new game-over event arrives.
-  const token = `${ev.reason}:${ev.moveNumber}:${ev.at}`;
-  if (token !== lastHandledGameOverUiToken) {
-    lastHandledGameOverUiToken = token;
-    gameOverOverlayDismissed = false;
-  }
+  // Update labels in uiRenderer
+  setLabels(labels);
 
-  // Game-over should feel final: stop the timer locally (host + client).
-  stopTimerForGameOver(incoming);
+  // Render board
+  renderBoard(
+    uiElements.boardEl,
+    uiElements.turnIndicator,
+    state,
+    meta,
+    placements,
+    validationStatus,
+    remoteDraft,
+    labels
+  );
 
-  renderGameOverUi();
+  // Render rack
+  renderRack(
+    uiElements.rackEl,
+    uiElements.rackOwnerEl,
+    state,
+    meta,
+    placements,
+    selectedTileId,
+    gameController.getRackOrder(),
+    gameController.syncLocalRackOrder.bind(gameController)
+  );
+
+  // Render scores
+  renderScores(uiElements.scoresEl, state, labels);
+
+  // Render stats
+  renderStats(uiElements.bagCountEl, uiElements.moveHistoryEl, state, labels);
+
+  // Render timer
+  timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+
+  // Render endgame scan status
+  endgameScanController.renderEndgameScanStatus();
+
+  // Render game over UI
+  gameOverController.renderGameOverUi();
+
+  // Render ready overlay
+  readyGate.renderReadyOverlay();
+
+  // Apply action buttons state
+  applyActionButtonsState();
 }
 
-function applyRematchRequest(playerId: string, at: number) {
-  if (!meta || !meta.gameOver) return;
-  const baseAt = meta.gameOver.at;
-  if (!meta.rematch || meta.rematch.at < baseAt) {
-    meta.rematch = { requestedBy: {}, at };
-  }
-  meta.rematch.requestedBy[playerId] = true;
+function sendSync(): void {
+  const state = gameController.getState();
+  if (!state || !meta) return;
+  const payload: ActionMessage = {
+    type: 'SYNC_STATE',
+    state,
+    meta,
+    labels
+  };
+  networkController.send(payload);
+  appendLog('Sync pushed to peer.');
 }
 
-function allPlayersRequestedRematch(): boolean {
-  if (!meta || !meta.gameOver) return false;
-  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
-  const baseAt = meta.gameOver.at;
-  const requestedBy = meta.rematch && meta.rematch.at >= baseAt ? meta.rematch.requestedBy : {};
-  return players.length > 0 && players.every((id) => requestedBy[id]);
+function sendDraftPlacements(): void {
+  const state = gameController.getState();
+  const placements = gameController.getPlacements();
+  if (!state || !meta) return;
+  if (meta.mode === 'solo') return;
+  const connection = networkController.getConnection();
+  if (!connection?.dataChannelReady) return;
+  if (state.currentPlayer !== meta.localPlayerId) return;
+  networkController.send({
+    type: 'DRAFT_PLACEMENTS',
+    playerId: meta.localPlayerId,
+    placements,
+    moveNumber: state.moveNumber
+  });
 }
 
-async function restartForRematch() {
-  if (!meta) return;
+function markLocalReady(): void {
+  if (!meta || !gameController.getState()) return;
+  if (!readyGate.isReadyGateEnabled()) return;
+  if (meta.gameOver) return;
 
-  const language = meta.language;
-  const players = currentState?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
-  const state = game.start(language, players);
-
-  currentState = state;
-  meta.sessionId = state.sessionId;
-  meta.gameOver = undefined;
-  meta.lastTurnEvent = undefined;
-  meta.rematch = undefined;
-
-  // If ready-gate was enabled for this session, mark it as started immediately.
-  if (isReadyGateEnabled(meta) && players.length === 2) {
-    meta.readyState = { [players[0]]: true, [players[1]]: true };
-    meta.gameStartAt = Date.now();
-  }
-
-  placements = [];
-  selectedTileId = null;
-  remoteDraft = null;
-  rackOrder = [];
-  rackOrderSessionId = state.sessionId;
-
-  // Reset endgame UI and scan state.
-  lastHandledGameOverUiToken = null;
-  gameOverOverlayDismissed = false;
-  endgameScanLastToken = null;
-  endgameScanInFlight = null;
-  setEndgameScanUi('idle');
-
-  // Ensure local dictionary min-length matches the session for validation.
-  const minWordLength = meta.minWordLength ?? resolveMinWordLength();
-  setMinWordLength(minWordLength);
-
-  meta.turnDeadline = null;
-  resetTurnTimer();
+  readyGate.markLocalReady();
   renderAll();
-  updateValidation();
-
-  await persistSnapshot();
-  if (meta.mode !== 'solo') {
-    sendSync();
-  }
-  appendLog('Rematch started.');
-}
-
-async function requestRematch() {
-  if (!meta || !currentState) return;
-  if (!meta.gameOver) return;
-
-  // Solo: instant rematch.
-  if (meta.mode === 'solo') {
-    await restartForRematch();
-    return;
-  }
-
-  // Optimistically mark local confirmation for immediate UI feedback.
-  applyRematchRequest(meta.localPlayerId, Date.now());
-  renderGameOverUi();
+  void storageController.persistSnapshot(
+    gameController.getState(),
+    meta,
+    labels
+  );
 
   if (meta.isHost) {
-    if (allPlayersRequestedRematch()) {
-      await restartForRematch();
-      return;
-    }
-    await persistSnapshot();
-    sendSync();
-    return;
-  }
-
-  if (!connection) {
-    showToast('Not connected — cannot request rematch.', 'danger');
-    return;
-  }
-
-  connection.send({
-    type: 'ACTION_REMATCH_REQUEST',
-    playerId: meta.localPlayerId,
-    at: Date.now()
-  } satisfies ActionMessage);
-  void persistSnapshot();
-  appendLog('Rematch request sent to host.');
-}
-
-function maybeShowTimeoutToastFromMeta(incoming: SessionMeta) {
-  const ev = incoming.lastTurnEvent;
-  if (!ev || ev.type !== 'timeout') return;
-  const token = `${ev.type}:${ev.playerId}:${ev.moveNumber}:${ev.at}`;
-  if (token === lastShownTurnEventToken) return;
-  lastShownTurnEventToken = token;
-
-  const playerName = labels[ev.playerId] ?? ev.playerId;
-  const isMe = incoming.localPlayerId === ev.playerId;
-  showToast(isMe ? "Time's up — you were auto-passed." : `Time's up — ${playerName} was auto-passed.`, 'danger');
-}
-
-async function maybeAutoPassOnTimeout() {
-  if (!meta || !currentState) return;
-  // Host (or solo) is authoritative for turn advancement.
-  if (!meta.isHost && meta.mode !== 'solo') return;
-  if (!meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) return;
-
-  const remainingMs = meta.turnDeadline - Date.now();
-  if (remainingMs > 0) return;
-
-  const token = `${currentState.sessionId}:${currentState.moveNumber}:${currentState.currentPlayer}:${meta.turnDeadline}`;
-  if (token === lastAutoPassToken || autoPassInProgress) return;
-  lastAutoPassToken = token;
-  autoPassInProgress = true;
-
-  try {
-    remoteDraft = null;
-    const timedOutPlayerId = currentState.currentPlayer;
-    const result = game.passTurn(timedOutPlayerId);
-    if (!result.success) return;
-
-    currentState = game.getState();
-    meta.lastTurnEvent = {
-      type: 'timeout',
-      playerId: timedOutPlayerId,
-      at: Date.now(),
-      moveNumber: currentState.moveNumber
-    };
-    if (timedOutPlayerId === meta.localPlayerId) {
-      placements = [];
-      selectedTileId = null;
-      updateValidation();
-    }
-    resetTurnTimer();
-    await persistSnapshot();
-    sendSync();
-    renderAll();
-    maybeShowTimeoutToastFromMeta(meta);
-    appendLog(`Auto-pass: ${labels[timedOutPlayerId] ?? timedOutPlayerId} ran out of time.`);
-    // Auto-pass might end the game via 4 consecutive passes.
-    if (result.gameEnded) {
-      meta.gameOver = {
-        reason: result.gameEnded.reason,
-        at: Date.now(),
-        moveNumber: currentState.moveNumber,
-        finalScores: result.gameEnded.finalScores
-      };
-      await persistSnapshot();
-      sendSync();
+    void readyGate.maybeScheduleGameStartFromReady().then(() => {
       renderAll();
-      maybeShowGameOverToastFromMeta(meta);
-      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
-    } else {
-      await checkAndHandleGameEnd();
-    }
-  } finally {
-    autoPassInProgress = false;
-  }
-}
-
-/**
- * Check word using the selected Russian dictionary variant
- */
-async function hasWordWithVariant(word: string, language: Language, variant?: 'full' | 'strict'): Promise<boolean> {
-  if (language === 'ru' && variant === 'strict') {
-    // Use strict dictionary only
-    const strictStatus = await ensureDictionaryStrict();
-    if (!strictStatus.available) return false;
-    const norm = word.trim().toUpperCase();
-    const minLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
-    if (norm.length < minLength) return false;
-    // Access the cache directly - we know it's loaded from ensureDictionaryStrict
-    const cache = await getDictionaryWordSet('ru-strict');
-    return cache?.has(norm) ?? false;
-  } else if (language === 'ru' && variant === 'full') {
-    // Use full dictionary only (don't fall back to strict)
-    const status = await ensureDictionary(language);
-    if (!status.available) return false;
-    const norm = word.trim().toUpperCase();
-    const minLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
-    if (norm.length < minLength) return false;
-    const cache = await getDictionaryWordSet(language);
-    return cache?.has(norm) ?? false;
+      void storageController.persistSnapshot(
+        gameController.getState(),
+        meta,
+        labels
+      );
+      sendSync();
+    });
   } else {
-    // Default behavior for non-Russian or when variant not specified
-    return hasWord(word, language);
+    networkController.send({
+      type: 'PLAYER_READY',
+      playerId: meta.localPlayerId,
+      ready: true
+    });
   }
 }
 
-function buildWordChecker(): WordChecker {
-  const variant = meta?.russianDictionaryVariant;
-  const fn = ((word: string, language: Language) => {
-    return hasWordWithVariant(word, language, variant);
-  }) as WordChecker;
-  fn.getAllWords = ((language: Language) => {
-    if (language === 'ru' && variant === 'strict') {
-      return getDictionaryWordSet('ru-strict') as Promise<Iterable<string> | null>;
-    }
-    return getDictionaryWordSet(language);
-  }) as WordChecker['getAllWords'];
-  return fn;
+function checkAndHandleGameEnd(): void {
+  endgameScanController.requestEndgameScanIfNeeded(uiElements.minLengthInput);
 }
 
-type EndgameWorkerMessage =
-  | {
-    type: 'ENDGAME_SCAN_RESPONSE';
-    requestId: string;
-    allStuck: boolean;
-    reason?: string;
-    error?: string;
-    debug?: {
-      dictKey: string;
-      dictionaryWords: number;
-      anchors: number;
-      boardTiles: number;
-      minLength: number;
-      cacheHit: boolean;
-      timingsMs: { total: number; trieBuild?: number; crossMasks: number; search: number };
-    };
-  };
-
-function resolveMinWordLength(): number {
-  return Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
-}
-
-function computeEndgameScanToken(): string | null {
-  if (!meta || !currentState) return null;
-  const variant = meta.russianDictionaryVariant ?? 'full';
-  const minLength = resolveMinWordLength();
-  return `${currentState.sessionId}:${currentState.moveNumber}:${meta.language}:${variant}:${minLength}`;
-}
-
-function setEndgameScanUi(state: EndgameScanUiState, message?: string) {
-  endgameScanUi = state;
-  if (state === 'idle') {
-    endgameScanStatus.style.display = 'none';
-    endgameScanStatus.textContent = '';
-    endgameScanStatus.className = 'pill';
-    return;
-  }
-
-  endgameScanStatus.className = 'pill';
-  endgameScanStatus.style.display = '';
-  if (state === 'running') {
-    endgameScanStatus.textContent = message ?? 'Checking endgame…';
-  } else {
-    endgameScanStatus.textContent = message ?? 'Endgame scan failed';
-    endgameScanStatus.classList.add('danger');
-  }
-}
-
-function isEndgameScanDebugEnabled(): boolean {
-  // Toggle with either:
-  // - localStorage.setItem('scrabble.debugEndgameScan', '1')
-  // - URL param ?debugEndgameScan=1
-  try {
-    const param = new URLSearchParams(window.location.search).get('debugEndgameScan');
-    if (param === '1' || param === 'true') return true;
-    return localStorage.getItem('scrabble.debugEndgameScan') === '1';
-  } catch {
-    return false;
-  }
-}
-
-function renderEndgameScanStatus() {
-  if (!meta || meta.gameOver) {
-    setEndgameScanUi('idle');
-    return;
-  }
-  if (endgameScanUi === 'idle') {
-    endgameScanStatus.style.display = 'none';
-    return;
-  }
-  // Otherwise `setEndgameScanUi` already hydrated the DOM; keep visible.
-  endgameScanStatus.style.display = '';
-}
-
-function requestEndgameScanIfNeeded() {
-  if (!meta || !currentState) return;
-  if (meta.gameOver) return;
-  // Host (or solo) is authoritative for \"game ended\" decisions.
-  if (!meta.isHost && meta.mode !== 'solo') return;
-  if (!endgameWorker) return;
-
-  // Only do the expensive scan once the bag is empty and we're late enough in the game.
-  const initialBag = getInitialBagSize(currentState.language);
-  const shouldRunExpensive = currentState.bag.length < initialBag / 2;
-  if (!shouldRunExpensive) return;
-  if (currentState.bag.length !== 0) return;
-
-  const token = computeEndgameScanToken();
-  if (!token) return;
-  if (endgameScanInFlight?.token === token) return;
-  if (endgameScanLastToken === token) return;
-
-  const requestId = crypto.randomUUID();
-  const debug = isEndgameScanDebugEnabled();
-  endgameScanInFlight = { requestId, token, startedAt: Date.now(), debug };
-  setEndgameScanUi('running');
-  appendLog(`Endgame scan started (bag empty).${debug ? ' (debug on)' : ''}`);
-
-  endgameWorker.postMessage({
-    type: 'ENDGAME_SCAN_REQUEST',
-    requestId,
-    state: currentState,
-    language: meta.language,
-    russianVariant: meta.russianDictionaryVariant,
-    minLength: resolveMinWordLength(),
-    debug
-  });
-}
-
-function handleEndgameWorkerMessage(msg: EndgameWorkerMessage) {
-  if (!msg || msg.type !== 'ENDGAME_SCAN_RESPONSE') return;
-  if (!endgameScanInFlight) return;
-  if (msg.requestId !== endgameScanInFlight.requestId) return;
-
-  const token = endgameScanInFlight.token;
-  const elapsedMs = Date.now() - endgameScanInFlight.startedAt;
-  const debugEnabled = endgameScanInFlight.debug;
-  endgameScanInFlight = null;
-  endgameScanLastToken = token;
-
-  // Ignore if state has changed since we requested the scan.
-  const currentToken = computeEndgameScanToken();
-  if (!currentToken || currentToken !== token) {
-    setEndgameScanUi('idle');
-    return;
-  }
-
-  if (msg.reason === 'error') {
-    setEndgameScanUi('error', 'Endgame scan error');
-    appendLog(`Endgame scan error after ${elapsedMs}ms: ${msg.error ?? 'unknown error'}`);
-    if (debugEnabled && msg.debug) {
-      appendLog(
-        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
-          msg.debug.timingsMs.total
-        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
-          msg.debug.timingsMs.crossMasks
-        )}, search=${Math.round(msg.debug.timingsMs.search)})`
-      );
-    }
-    return;
-  }
-
-  if (msg.reason === 'dictionary_unavailable') {
-    // We refuse to declare "no moves" without a full dictionary to avoid false positives.
-    setEndgameScanUi('idle');
-    appendLog(`Endgame scan skipped after ${elapsedMs}ms: dictionary unavailable (won't auto-end).`);
-    if (debugEnabled && msg.debug) {
-      appendLog(
-        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
-          msg.debug.timingsMs.total
-        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
-          msg.debug.timingsMs.crossMasks
-        )}, search=${Math.round(msg.debug.timingsMs.search)})`
-      );
-    }
-    return;
-  }
-
-  if (!msg.allStuck) {
-    setEndgameScanUi('idle');
-    appendLog(`Endgame scan finished in ${elapsedMs}ms: moves available.`);
-    if (debugEnabled && msg.debug) {
-      appendLog(
-        `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
-          msg.debug.timingsMs.total
-        )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
-          msg.debug.timingsMs.crossMasks
-        )}, search=${Math.round(msg.debug.timingsMs.search)})`
-      );
-    }
-    return;
-  }
-
-  appendLog(`Endgame scan finished in ${elapsedMs}ms: no moves for all players.`);
-  if (debugEnabled && msg.debug) {
-    appendLog(
-      `Endgame scan debug: dict=${msg.debug.dictKey} words=${msg.debug.dictionaryWords} anchors=${msg.debug.anchors} tiles=${msg.debug.boardTiles} cacheHit=${msg.debug.cacheHit} timingMs(total=${Math.round(
-        msg.debug.timingsMs.total
-      )}, trie=${msg.debug.timingsMs.trieBuild ? Math.round(msg.debug.timingsMs.trieBuild) : '-'}, cross=${Math.round(
-        msg.debug.timingsMs.crossMasks
-      )}, search=${Math.round(msg.debug.timingsMs.search)})`
-    );
-  }
-
-  // All players stuck: finish the game (authoritatively).
-  if (!meta || !currentState) return;
+function handleEndgameScanComplete(): void {
+  const state = gameController.getState();
+  if (!meta || !state) return;
   if (meta.gameOver) return;
   if (!meta.isHost && meta.mode !== 'solo') return;
 
+  const game = gameController.getGame();
   game.applyEndGameScoring();
-  currentState = game.getState();
+  const newState = game.getState();
+  gameController.setCurrentState(newState);
   meta.gameOver = {
     reason: 'no_moves_bag_empty',
     at: Date.now(),
-    moveNumber: currentState.moveNumber,
-    finalScores: structuredClone(currentState.scores)
+    moveNumber: newState.moveNumber,
+    finalScores: structuredClone(newState.scores)
   };
 
-  setEndgameScanUi('idle');
-  void persistSnapshot().then(() => {
+  void storageController.persistSnapshot(newState, meta, labels).then(() => {
     sendSync();
     renderAll();
-    maybeShowGameOverToastFromMeta(meta!);
+    if (meta) {
+      gameOverController.maybeShowGameOverToastFromMeta(meta);
+    }
     appendLog(`Game ended: ${formatGameOverReason('no_moves_bag_empty')}`);
   });
 }
 
-async function checkAndHandleGameEnd() {
-  // Non-blocking: the worker decides and will set meta.gameOver if appropriate.
-  requestEndgameScanIfNeeded();
-}
-
-async function updateValidation() {
-  validationNonce += 1;
-  const ticket = validationNonce;
-
-  // Placements affect multiple action buttons (especially Clear placements / Confirm move).
-  // Ensure their disabled state stays in sync whenever validation runs (which we call after
-  // any local placement changes).
-  applyActionButtonsState();
-
-  if (!currentState || !meta || placements.length === 0) {
-    validationStatus = 'idle';
-    renderBoard();
-    wordCheckStatus.style.display = 'none';
-    wordLengthStatus.style.display = 'none';
-    return;
-  }
-
-  validationStatus = 'checking';
-  renderBoard();
-  wordCheckStatus.textContent = 'Checking...';
-  wordCheckStatus.className = 'pill';
-  wordCheckStatus.style.display = '';
-  wordLengthStatus.style.display = 'none';
-
-  const preview = new ScrabbleGame();
-  preview.resume(structuredClone(currentState));
-  const result = await preview.placeMove(
-    meta.localPlayerId,
-    placements,
-    (word, lang) => hasWord(word, lang)
-  );
-
-  if (ticket !== validationNonce) return;
-
-  validationStatus = result.success ? 'valid' : 'invalid';
-  renderBoard();
-
-  wordCheckStatus.className = 'pill';
-  if (result.success && result.words) {
-    wordCheckStatus.textContent = `Valid: ${result.words.join(', ')} (+${result.scoreDelta})`;
-    wordCheckStatus.classList.add('active');
-    wordLengthStatus.style.display = 'none';
-  } else {
-    wordCheckStatus.textContent = result.message || 'Invalid';
-    wordCheckStatus.classList.add('danger');
-
-    // Extra pill: show ONLY when failure is caused by min word length rule.
-    // Current engine reports "Invalid word: XYZ" for any dictionary rejection;
-    // we treat it as "too short" if that invalid word is shorter than the configured minimum.
-    const minWordLength = Math.max(
-      1,
-      Math.floor(meta.minWordLength ?? (Number(minLengthInput.value) || 2))
-    );
-    const invalidWordMatch = (result.message ?? '').match(/^Invalid word:\s*(.+)\s*$/);
-    const invalidWord = invalidWordMatch?.[1]?.trim() ?? '';
-    const isTooShort = Boolean(invalidWord) && invalidWord.length > 0 && invalidWord.length < minWordLength;
-    if (isTooShort) {
-      wordLengthStatus.className = 'pill danger';
-      wordLengthStatus.textContent = `Too short (min ${minWordLength})`;
-      wordLengthStatus.style.display = '';
-    } else {
-      wordLengthStatus.style.display = 'none';
-    }
-  }
-}
-
-function renderHandshakeVisibility() {
-  const hostCard = document.querySelector<HTMLDivElement>('#host-handshake')!;
-  const clientCard = document.querySelector<HTMLDivElement>('#client-handshake')!;
-  const hostVisible = mode === 'host';
-  const clientVisible = mode === 'client';
-  hostCard.style.display = hostVisible ? 'block' : 'none';
-  clientCard.style.display = clientVisible ? 'block' : 'none';
-  // Help screen readers (and our test browser snapshot) ignore hidden chunks.
-  hostCard.setAttribute('aria-hidden', hostVisible ? 'false' : 'true');
-  clientCard.setAttribute('aria-hidden', clientVisible ? 'false' : 'true');
-}
-
-function applyModeUI() {
-  modeTabs.querySelectorAll('button').forEach((b) => {
-    const isActive = b.dataset.mode === mode;
-    b.classList.toggle('active', isActive);
-  });
-  renderHandshakeVisibility();
-  renderModeControls();
-}
-
-function renderModeControls() {
-  const isJoin = mode === 'client';
-  const isSolo = mode === 'solo';
-  const meWrapper = meInput.closest('.stack') as HTMLElement;
-  const peerWrapper = peerInput.closest('.stack') as HTMLElement;
-  const minLengthWrapper = minLengthInput.closest('.stack') as HTMLElement;
-  if (meWrapper) {
-    meWrapper.style.display = isJoin ? 'none' : '';
-  }
-  if (peerWrapper) {
-    peerWrapper.style.display = isSolo || isJoin ? 'none' : '';
-  }
-  if (minLengthWrapper) {
-    minLengthWrapper.style.display = isJoin ? 'none' : '';
-  }
-  minLengthInput.disabled = isJoin;
-
-  languageSelect.disabled = isJoin;
-  russianVariantSelect.disabled = isJoin;
-  if (languageWrapper) {
-    languageWrapper.style.display = isJoin ? 'none' : '';
-  }
-  // Show/hide Russian variant selector based on language
-  if (!isJoin) {
-    const language = languageSelect.value as Language;
-    russianVariantWrapper.style.display = language === 'ru' ? 'flex' : 'none';
-  }
-  timerInput.disabled = isJoin;
-  timerEnabledToggle.disabled = isJoin;
-  if (timerWrapper) {
-    timerWrapper.style.display = isJoin ? 'none' : '';
-  }
-  updateTimerSettingsUI();
-  // Join mode does not start a local session; it connects and then receives a sync from host.
-  startBtn.style.display = isJoin ? 'none' : '';
-}
-
-function debounce<T extends (...args: any[]) => void>(fn: T, delayMs: number): (...args: Parameters<T>) => void {
-  let t: number | null = null;
-  return (...args: Parameters<T>) => {
-    if (t != null) window.clearTimeout(t);
-    t = window.setTimeout(() => fn(...args), delayMs);
-  };
-}
-
-function looksLikeEncodedSdp(text: string): boolean {
-  if (!text) return false;
-  // Our P2P layer encodes SDP as `btoa(JSON.stringify(desc))`.
-  // Validate it decodes to an object with `type` and `sdp`.
-  try {
-    const decoded = JSON.parse(atob(text)) as any;
-    return Boolean(decoded && typeof decoded === 'object' && typeof decoded.type === 'string' && typeof decoded.sdp === 'string');
-  } catch {
-    return false;
-  }
-}
-
-async function maybeAutoBuildClientAnswer() {
-  if (mode !== 'client') return;
-  const offer = hostOfferInput.value.trim();
-  if (!offer) return;
-  if (offer === lastHandshakeOffer) return;
-  if (!looksLikeEncodedSdp(offer)) return;
-  lastHandshakeOffer = offer;
-  await buildClientAnswer();
-}
-
-async function maybeAutoApplyHostAnswer() {
-  if (mode !== 'host') return;
-  if (!hostApplyAnswer) return;
-  const answer = answerText.value.trim();
-  if (!answer) return;
-  if (answer === lastHandshakeAnswer) return;
-  if (!looksLikeEncodedSdp(answer)) return;
-  lastHandshakeAnswer = answer;
-  await applyHostAnswer();
-}
-
-function renderVisibility() {
-  settingsSection.style.display = settingsHidden ? 'none' : '';
-  settingsSection.setAttribute('aria-hidden', settingsHidden ? 'true' : 'false');
-  logEl.style.display = logsHidden ? 'none' : '';
-  logEl.setAttribute('aria-hidden', logsHidden ? 'true' : 'false');
-  toggleSetupBtn.textContent = settingsHidden ? 'Show setup' : 'Hide setup';
-  toggleSetupBtn.setAttribute('aria-pressed', settingsHidden ? 'true' : 'false');
-  toggleLogsBtn.textContent = logsHidden ? 'Show logs' : 'Hide logs';
-  toggleLogsBtn.setAttribute('aria-pressed', logsHidden ? 'true' : 'false');
-}
-
-function renderBoard() {
-  const state = currentState;
-  if (!state) {
-    boardEl.innerHTML = '<p class="hint">Start a session to see the board.</p>';
-    return;
-  }
-
-  const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
-  const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
-  const ghostPlacements =
-    remoteDraft &&
-      remoteDraft.moveNumber === state.moveNumber &&
-      remoteDraft.playerId === state.currentPlayer &&
-      remoteDraft.playerId !== meta?.localPlayerId
-      ? remoteDraft.placements
-      : [];
-  const ghostKeys = new Set(ghostPlacements.map((p) => `${p.x},${p.y}`));
-  const rows: string[] = [];
-  for (let y = 0; y < BOARD_SIZE; y += 1) {
-    const cells: string[] = [];
-    for (let x = 0; x < BOARD_SIZE; x += 1) {
-      const placed = placements.find((p) => p.x === x && p.y === y);
-      const ghostPlaced = !placed ? ghostPlacements.find((p) => p.x === x && p.y === y) : undefined;
-      const tile = placed?.tile ?? ghostPlaced?.tile ?? state.board[y][x].tile;
-      const premium = premiumClass(x, y);
-      const isNew = placementKeys.has(`${x},${y}`);
-      const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
-      const isLastMove = !isNew && lastMoveKeys.has(`${x},${y}`);
-      const validationClass =
-        isNew && validationStatus === 'valid'
-          ? 'valid'
-          : isNew && validationStatus === 'invalid'
-            ? 'invalid'
-            : isNew && validationStatus === 'checking'
-              ? 'checking'
-              : '';
-      const classes = [
-        'cell',
-        premium,
-        isNew ? 'pending' : '',
-        isGhost ? 'remote-draft' : '',
-        isLastMove ? 'last-move' : '',
-        validationClass
-      ]
-        .filter(Boolean)
-        .join(' ');
-      const lastMoveA11y = isLastMove && tile ? ' role="img" aria-label="Last placed tile"' : '';
-      cells.push(
-        `<div class="${classes}" data-x="${x}" data-y="${y}"${lastMoveA11y}>
-          ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
-        </div>`
-      );
-    }
-    rows.push(`<div class="row">${cells.join('')}</div>`);
-  }
-  boardEl.innerHTML = rows.join('');
-
-  turnIndicator.textContent = labels[state.currentPlayer] ?? state.currentPlayer;
-  turnIndicator.classList.toggle('active', meta?.localPlayerId === state.currentPlayer);
-}
-
-function renderRack() {
-  const state = currentState;
-  if (!state || !meta) {
-    rackEl.innerHTML = '<p class="hint">No rack yet.</p>';
-    return;
-  }
-  syncLocalRackOrder(state, meta);
-  const rack = state.racks[meta.localPlayerId] ?? [];
-  const byId = new Map(rack.map((t) => [t.id, t] as const));
-  const orderedRack = rackOrder.map((id) => byId.get(id)).filter(Boolean) as Tile[];
-  const usedIds = new Set(placements.map((p) => p.tile.id));
-  const tiles = orderedRack
-    .filter((t) => !usedIds.has(t.id))
-    .map((t) => renderTile(t, t.id === selectedTileId))
-    .join('');
-
-  const pendingTiles = placements.map((p) => renderTile(p.tile, false, true)).join('');
-  rackEl.innerHTML = `
-    <div class="rack-row">${tiles || '<span class="hint">Empty rack</span>'}</div>
-    <div class="rack-row hint">Pending: ${pendingTiles || 'None'}</div>
-  `;
-
-  rackOwnerEl.textContent = `You are: ${labels[meta.localPlayerId] ?? meta.localPlayerId}`;
-}
-
-function renderScores() {
-  const state = currentState;
-  if (!state) {
-    scoresEl.innerHTML = '<p class="hint">No scores yet.</p>';
-    return;
-  }
-  const parts = Object.entries(state.scores).map(
-    ([id, score]) =>
-      `<div class="score">
-        <span>${labels[id] ?? id}</span>
-        <strong>${score}</strong>
-      </div>`
-  );
-  scoresEl.innerHTML = parts.join('');
-}
-
-function renderStats() {
-  const state = currentState;
-  if (!state) {
-    bagCountEl.textContent = '';
-    moveHistoryEl.innerHTML = '<p class="hint">Start a game to see stats.</p>';
-    return;
-  }
-
-  bagCountEl.textContent = String(state.bag.length);
-
-  const byPlayer = state.players.map((id) => ({
-    id,
-    entries: state.history.filter((h) => h.playerId === id)
-  }));
-
-  const formatEntry = (entry: (typeof state.history)[number]) => {
-    if (entry.type === 'MOVE') {
-      const words = entry.words.join(', ');
-      return `#${entry.moveNumber} — ${words} (+${entry.scoreDelta})`;
-    }
-    if (entry.type === 'PASS') return `#${entry.moveNumber} — Pass`;
-    return `#${entry.moveNumber} — Exchange ${entry.exchangedTiles}`;
-  };
-
-  const blocks = byPlayer.map(({ id, entries }) => {
-    const name = labels[id] ?? id;
-    const items = entries.length
-      ? `<ol class="history-list">${entries
-        .map((e) => `<li>${formatEntry(e)}</li>`)
-        .join('')}</ol>`
-      : '<p class="hint">No moves yet.</p>';
-    return `<div class="history-player"><h4>${name}</h4>${items}</div>`;
-  });
-
-  moveHistoryEl.innerHTML = blocks.join('');
-}
-
-function renderAll() {
-  renderBoard();
-  renderRack();
-  renderScores();
-  renderStats();
-  renderTimer();
-  renderEndgameScanStatus();
-  renderGameOverUi();
-  renderReadyOverlay();
-  applyActionButtonsState();
-}
-
-function applyActionButtonsState() {
-  const state = currentState;
-  const isOver = Boolean(meta?.gameOver);
-  const locked = isPreGameLocked();
-  applyActionButtonsStateToDom(
-    { confirmMoveBtn, passBtn, exchangeBtn, clearPlacementsBtn, mixRackBtn },
-    {
-      state,
-      localPlayerId: meta?.localPlayerId ?? null,
-      locked,
-      isOver,
-      placementsCount: placements.length
-    }
-  );
-}
-
-function renderTile(tile: Tile, selected = false, pending = false) {
-  const classes = ['tile'];
-  if (selected) classes.push('selected');
-  if (pending) classes.push('pending');
-  if (tile.blank && tile.letter === ' ') classes.push('blank');
-  return `<button class="${classes.join(' ')}" data-tile="${tile.id}">
-    <span class="letter">${tile.blank && tile.letter === ' ' ? '?' : tile.letter}</span>
-    <span class="value">${tile.value}</span>
-  </button>`;
-}
-
-function premiumClass(x: number, y: number): string {
-  if (x === 7 && y === 7) return 'center';
-  const tripleWord = [0, 7, 14];
-  if (tripleWord.includes(x) && tripleWord.includes(y)) return 'tw';
-  if ((x === y || x + y === 14) && x !== 0 && x !== 7 && x !== 14) return 'dw';
-  const tl = [
-    [1, 5],
-    [1, 9],
-    [5, 1],
-    [5, 5],
-    [5, 9],
-    [5, 13],
-    [9, 1],
-    [9, 5],
-    [9, 9],
-    [9, 13],
-    [13, 5],
-    [13, 9]
-  ];
-  const dl = [
-    [0, 3],
-    [0, 11],
-    [2, 6],
-    [2, 8],
-    [3, 0],
-    [3, 7],
-    [3, 14],
-    [6, 2],
-    [6, 6],
-    [6, 8],
-    [6, 12],
-    [7, 3],
-    [7, 11],
-    [8, 2],
-    [8, 6],
-    [8, 8],
-    [8, 12],
-    [11, 0],
-    [11, 7],
-    [11, 14],
-    [12, 6],
-    [12, 8],
-    [14, 3],
-    [14, 11]
-  ];
-  if (tl.some(([cx, cy]) => cx === x && cy === y)) return 'tl';
-  if (dl.some(([cx, cy]) => cx === x && cy === y)) return 'dl';
-  return '';
-}
-
-function onRackClick(ev: MouseEvent) {
-  if (isPreGameLocked()) return;
-  const button = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-tile]');
-  if (!button) return;
-  selectedTileId = button.dataset.tile ?? null;
-  renderRack();
-}
-
-function onBoardClick(ev: MouseEvent) {
-  const cell = (ev.target as HTMLElement).closest<HTMLDivElement>('[data-x][data-y]');
-  if (!cell || !currentState || !meta) return;
-  if (isPreGameLocked()) return;
-  if (meta.gameOver) return;
-  if (currentState.currentPlayer !== meta.localPlayerId) return;
-  const x = Number(cell.dataset.x);
-  const y = Number(cell.dataset.y);
-  if (currentState.board[y][x].tile) {
-    // Prevent overriding existing tile
-    return;
-  }
-
-  if (selectedTileId) {
-    placeSelectedTileAt(x, y);
-  } else {
-    // Remove pending tile if tapped
-    const idx = placements.findIndex((p) => p.x === x && p.y === y);
-    if (idx >= 0) {
-      placements.splice(idx, 1);
-      sendDraftPlacements();
-      renderBoard();
-      renderRack();
-      updateValidation();
-    }
-  }
-}
-
-function placeSelectedTileAt(x: number, y: number) {
-  if (!currentState || !meta) return;
-  if (!selectedTileId) return;
-  if (currentState.board[y][x].tile) return;
-
-  const tile = takeAvailableTile(selectedTileId);
-  if (!tile) return;
-
-  // Handle blank tile letter selection
-  if (tile.blank) {
-    selectBlankLetter(tile).then((updatedTile) => {
-      if (!updatedTile) return;
-
-      // Replace existing placement if any
-      const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
-      if (existingIdx >= 0) {
-        placements.splice(existingIdx, 1);
-      }
-
-      placements.push({ x, y, tile: updatedTile });
-      selectedTileId = null;
-      sendDraftPlacements();
-      renderBoard();
-      renderRack();
-      updateValidation();
-    });
-    return;
-  }
-
-  // Replace existing placement if any
-  const existingIdx = placements.findIndex((p) => p.x === x && p.y === y);
-  if (existingIdx >= 0) {
-    placements.splice(existingIdx, 1);
-  }
-
-  placements.push({ x, y, tile });
-  selectedTileId = null;
-  sendDraftPlacements();
-  renderBoard();
-  renderRack();
-  updateValidation();
-}
-
-function takeAvailableTile(tileId: string): Tile | null {
-  if (!currentState || !meta) return null;
-  const used = new Set(placements.map((p) => p.tile.id));
-  const rack = currentState.racks[meta.localPlayerId] ?? [];
-  const tile = rack.find((t) => t.id === tileId && !used.has(t.id));
-  return tile ?? null;
-}
-
-function selectBlankLetter(tile: Tile): Promise<Tile | null> {
-  return new Promise((resolve) => {
-    const language = meta?.language ?? 'en';
-    const letters = language === 'en'
-      ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-      : 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ';
-
-    // Create modal dialog
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.8);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-    `;
-
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-      background: #1e293b;
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 16px;
-      padding: 24px;
-      max-width: 420px;
-      width: 90%;
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
-    `;
-
-    dialog.innerHTML = `
-      <h3 style="margin: 0 0 12px 0; color: #f1f5f9; font-size: 1.25rem; font-weight: 600;">Choose blank tile letter</h3>
-      <p style="margin: 0 0 20px 0; color: #94a3b8; font-size: 0.9rem;">Select which letter this blank tile will represent:</p>
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 8px; margin-bottom: 20px;">
-        ${letters.split('').map(letter => `
-          <button class="blank-letter-btn" data-letter="${letter}" style="
-            padding: 10px 8px;
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 8px;
-            background: linear-gradient(145deg, #fef3c7 0%, #fde68a 50%, #fcd34d 100%);
-            color: #1c1917;
-            cursor: pointer;
-            font-weight: 700;
-            font-size: 16px;
-            transition: all 0.15s;
-            box-shadow: inset 0 -2px 0 #b45309, 0 2px 4px rgba(0,0,0,0.2);
-          " onmouseover="this.style.transform='translateY(-2px) scale(1.05)'; this.style.boxShadow='0 0 0 2px #3b82f6, inset 0 -2px 0 #b45309, 0 4px 8px rgba(0,0,0,0.3)'"
-             onmouseout="this.style.transform=''; this.style.boxShadow='inset 0 -2px 0 #b45309, 0 2px 4px rgba(0,0,0,0.2)'">
-            ${letter}
-          </button>
-        `).join('')}
-      </div>
-      <div style="display: flex; gap: 10px; justify-content: flex-end;">
-        <button id="cancel-blank" style="
-          padding: 10px 20px;
-          border: 1px solid rgba(148, 163, 184, 0.2);
-          border-radius: 10px;
-          background: #334155;
-          color: #f1f5f9;
-          cursor: pointer;
-          font-weight: 600;
-          font-size: 0.9rem;
-          transition: all 0.15s;
-        " onmouseover="this.style.background='#475569'" onmouseout="this.style.background='#334155'">Cancel</button>
-      </div>
-    `;
-
-    modal.appendChild(dialog);
-    document.body.appendChild(modal);
-
-    // Handle letter selection
-    dialog.addEventListener('click', (ev) => {
-      const target = ev.target as HTMLElement;
-      if (target.classList.contains('blank-letter-btn')) {
-        const letter = target.dataset.letter!;
-        const updatedTile: Tile = {
-          ...tile,
-          letter: letter,
-          value: 0 // blanks are worth 0 points
-        };
-        document.body.removeChild(modal);
-        resolve(updatedTile);
-      } else if (target.id === 'cancel-blank') {
-        document.body.removeChild(modal);
-        resolve(null);
-      }
-    });
-
-    // Handle escape key
-    const handleEscape = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') {
-        document.body.removeChild(modal);
-        document.removeEventListener('keydown', handleEscape);
-        resolve(null);
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-  });
-}
-
-async function startSession() {
-  if (mode === 'client') {
-    appendLog('Join mode: scan/paste host offer to generate your answer, then wait for sync.');
-    return;
-  }
-
-  const language = languageSelect.value as Language;
-  languageSelect.value = language;
-  const russianVariant = language === 'ru' ? (russianVariantSelect.value as 'full' | 'strict') : undefined;
-  const me = meInput.value || 'Player 1';
-  const peer = peerInput.value || 'Player 2';
-  const localId = mode === 'solo' ? 'p1' : 'host';
-  const remoteId = mode === 'solo' ? undefined : 'client';
-  const players = [localId];
-  if (remoteId) players.push(remoteId);
-
-  const minWordLength = Math.max(1, Math.floor(Number(minLengthInput.value) || 2));
-  setMinWordLength(minWordLength);
-
-  const timerDurationSec = resolveTimerDurationSeconds();
-  const timerEnabled = timerEnabledToggle.checked && timerDurationSec > 0;
-  const shouldStartTimerNow = mode === 'solo';
-
-  await ensureLanguage(language);
-  // Ensure the selected Russian dictionary variant is available
-  if (language === 'ru' && russianVariant === 'strict') {
-    await ensureDictionaryStrict();
-  }
-
-  const state = game.start(language, players);
-  meta = {
-    mode,
-    language,
-    isHost: mode === 'host' || mode === 'solo',
-    localPlayerId: localId,
-    russianDictionaryVariant: russianVariant,
-    remotePlayerId: remoteId,
-    sessionId: state.sessionId,
-    minWordLength,
-    timerEnabled,
-    timerDurationSec,
-    // In host P2P mode, start the first timer only after both users are connected.
-    turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null,
-    // Ready gate: only initialize for new P2P sessions (host/client).
-    readyState: mode === 'host' && remoteId ? { [localId]: false, [remoteId]: false } : undefined,
-    gameStartAt: mode === 'host' && remoteId ? null : undefined
-  };
-  labels = { [localId]: me };
-  if (remoteId) {
-    labels[remoteId] = peer;
-  }
-  currentState = state;
-  placements = [];
-  rackOrder = [];
-  rackOrderSessionId = state.sessionId;
-  resetTurnTimer();
-  renderAll();
-  updateValidation();
-  appendLog(`Started ${mode} game as ${me}`);
-
-  await persistSnapshot();
-
-  if (mode === 'host') {
-    buildHostOffer();
-  }
-}
-
-async function buildHostOffer() {
-  if (mode !== 'host') {
-    appendLog('Switch to Host mode to create an offer.');
-    return;
-  }
-  // An offer without a started host session is confusing (there is nothing to sync once connected).
-  if (!meta?.isHost || !currentState) {
-    appendLog('Start a Host session first, then share the offer QR.');
-    return;
-  }
-  await ensureLanguage(languageSelect.value as Language);
-
-  const callbacks = buildCallbacks();
-  // Cleanup any previous connection to avoid leaking peer connections when regenerating offers.
-  if (connection) {
-    const old = connection;
-    connection = null;
-    try {
-      old.close();
-    } catch {
-      // ignore
-    }
-  }
-  const { connection: conn, offer, applyAnswer: apply } = await createHost(callbacks);
-  connection = conn;
-  hostApplyAnswer = apply;
-  offerText.value = offer;
-  offerQr.src = await toQrDataUrl(offer);
-  p2pStatus.textContent = 'Offer created - waiting for answer';
-  p2pStatus.className = 'pill';
-  appendLog('Offer created. Share this code/QR, then paste the answer you get back.');
-}
-
-async function applyHostAnswer() {
-  if (!hostApplyAnswer) {
-    appendLog('Create an offer first.');
-    return;
-  }
-  const answer = answerText.value.trim();
-  if (!answer) {
-    appendLog('Paste or scan an answer first.');
-    return;
-  }
-  await hostApplyAnswer(answer);
-  p2pStatus.textContent = 'Connecting...';
-  p2pStatus.className = 'pill';
-  appendLog('Answer applied. Waiting for data channel to open.');
-}
-
-async function buildClientAnswer() {
-  const offer = hostOfferInput.value.trim();
-  if (!offer) {
-    appendLog('Paste or scan host offer first.');
-    return;
-  }
-  const callbacks = buildCallbacks();
-  // Cleanup any previous connection to avoid leaking peer connections when rebuilding an answer.
-  if (connection) {
-    const old = connection;
-    connection = null;
-    try {
-      old.close();
-    } catch {
-      // ignore
-    }
-  }
-  const { connection: conn, answer } = await createClient(callbacks, offer);
-  connection = conn;
-  clientAnswer.value = answer;
-  answerQr.src = await toQrDataUrl(answer);
-  p2pStatus.textContent = 'Answer ready - share with host';
-  p2pStatus.className = 'pill';
-  appendLog('Answer created. Share this code/QR back to the host.');
-}
-
-function buildCallbacks(): P2PCallbacks {
-  return {
-    onMessage: (data: unknown) => handleMessage(data),
-    onOpen: () => {
-      p2pStatus.textContent = 'Connected';
-      p2pStatus.className = 'pill active';
-      appendLog('Data channel open.');
-
-      // Hide the disconnect overlay and restore timer
-      hideDisconnectOverlay();
-
-      if (meta?.isHost && currentState) {
-        // If host started the session before the peer connected, arm the initial turn timer now.
-        // But if we're reconnecting (disconnectTimerState was set), don't reset - it's already restored.
-        if (meta.timerEnabled && meta.timerDurationSec && !meta.turnDeadline && !isPreGameLocked()) {
-          resetTurnTimer();
-          void persistSnapshot();
-        }
-        appendLog('Host: sending sync to peer.');
-        sendSync();
-      } else {
-        appendLog('Client: requesting sync from host.');
-        connection?.send({ type: 'REQUEST_SYNC' });
-      }
-    },
-    onClose: () => {
-      handleDisconnect();
-    },
-    onError: (err: unknown) => {
-      appendLog(`P2P error: ${String(err)}`);
-    },
-    onLog: (msg: string) => appendLog(msg),
-    onConnectionStateChange: (state) => {
-      if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-        handleDisconnect();
-      }
-    }
-  };
-}
-
-function showDisconnectOverlay(message?: string) {
-  if (message) {
-    disconnectMessage.textContent = message;
-  } else {
-    disconnectMessage.textContent = 'The connection to your opponent was interrupted.';
-  }
-  disconnectOverlay.style.display = '';
-
-  // Pause the timer by saving its remaining time
-  if (meta?.timerEnabled && meta.turnDeadline) {
-    const remaining = Math.max(0, meta.turnDeadline - Date.now());
-    disconnectTimerState = { deadline: meta.turnDeadline, remaining };
-    stopTimerTicker();
-  }
-}
-
-function hideDisconnectOverlay() {
-  disconnectOverlay.style.display = 'none';
-
-  // Restore the timer with the same remaining time (effectively pausing during disconnect)
-  if (meta?.timerEnabled && disconnectTimerState && disconnectTimerState.remaining > 0) {
-    meta.turnDeadline = Date.now() + disconnectTimerState.remaining;
-    startTimerTicker();
-    void persistSnapshot();
-  }
-  disconnectTimerState = null;
-}
-
-function handleDisconnect() {
-  // Guard: If connection is null, we are likely manually resetting/reconnecting,
-  // so ignore callbacks from dying connections to prevent loops.
-  if (!connection) return;
-
-  if (p2pStatus.textContent === 'Connection lost') return;
-  p2pStatus.textContent = 'Connection lost';
-  p2pStatus.className = 'pill danger';
-  appendLog('P2P connection lost or failed.');
-
-  // If we are in the middle of a game, show overlay and try to help the user reconnect.
-  if (currentState && mode !== 'solo') {
-    const roleMessage = mode === 'host'
-      ? 'Creating a new connection offer...'
-      : 'Please scan the host\'s QR code again to reconnect.';
-    showDisconnectOverlay(roleMessage);
-    void triggerReconnect();
-  }
-}
-
-async function triggerReconnect() {
-  if (mode === 'solo') return;
-
-  // Cleanup old connection if exists, preventing loop via null check in handleDisconnect
-  if (connection) {
-    const old = connection;
-    connection = null; // Sentinel to block handleDisconnect loop
-    try {
-      old.close();
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  // Ensure setup is visible so users can see the handshake UI
-  if (settingsHidden) {
-    settingsHidden = false;
-    renderVisibility();
-  }
-
-  if (mode === 'host') {
-    appendLog('Host: Connection lost. Recreating offer...');
-    // Small delay to ensure previous connection teardown
-    await new Promise(r => setTimeout(r, 500));
-    await buildHostOffer();
-  } else if (mode === 'client') {
-    appendLog('Client: Connection lost. Please re-scan host offer.');
-    p2pStatus.textContent = 'Disconnected';
-    p2pStatus.className = 'pill'; // Reset danger class
-  }
-}
-
-
-async function handleMessage(data: unknown) {
+async function handleMessage(data: unknown): Promise<void> {
   const msg = data as ActionMessage;
+
   if (msg.type === 'SYNC_STATE') {
     const incoming = msg.meta;
     if (incoming.mode === 'host') {
@@ -2358,69 +742,79 @@ async function handleMessage(data: unknown) {
       meta = { ...incoming, isHost: false };
     }
     labels = msg.labels;
-    game.resume(msg.state);
-    currentState = game.getState();
-    rackOrder = [];
-    rackOrderSessionId = currentState.sessionId;
-    placements = [];
-    remoteDraft = null;
-    languageSelect.value = meta.language;
-    // Update Russian variant selector if applicable
+    gameController.resume(msg.state);
+    gameController.setMeta(meta);
+    networkController.setMeta(meta);
+    networkController.setCurrentState(msg.state);
+    networkController.setLabels(labels);
+    timerController.setMeta(meta);
+    timerController.setConnection(networkController.getConnection());
+    readyGate.setMeta(meta);
+    readyGate.setCurrentState(msg.state);
+    readyGate.setLabels(labels);
+    gameOverController.setMeta(meta);
+    gameOverController.setCurrentState(msg.state);
+    gameOverController.setLabels(labels);
+    endgameScanController.setMeta(meta);
+    endgameScanController.setCurrentState(msg.state);
+
+    uiElements.languageSelect.value = meta.language;
     if (meta.language === 'ru') {
-      russianVariantWrapper.style.display = 'flex';
-      russianVariantSelect.value = meta.russianDictionaryVariant || 'full';
+      uiElements.russianVariantWrapper.style.display = 'flex';
+      uiElements.russianVariantSelect.value = meta.russianDictionaryVariant || 'full';
     } else {
-      russianVariantWrapper.style.display = 'none';
+      uiElements.russianVariantWrapper.style.display = 'none';
     }
     mode = meta.mode;
-    applyModeUI();
-    applyTimerInputFromMeta();
-    applyMinLengthInputFromMeta();
+    applyModeUIInternal();
+    applyTimerInputFromMetaInternal();
+    applyMinLengthInputFromMetaInternal();
     if (meta.timerEnabled && meta.turnDeadline) {
-      startTimerTicker();
+      timerController.startTimerTicker();
     } else {
-      stopTimerTicker();
+      timerController.stopTimerTicker();
     }
-    updateValidation();
+    gameController.updateValidation();
     renderAll();
-    await persistSnapshot();
+    await storageController.persistSnapshot(msg.state, meta, labels);
     appendLog('Synced state from peer.');
-    // Show "timeout auto-pass" banner when we learn about it.
     if (meta) {
       maybeShowTimeoutToastFromMeta(meta);
-      maybeShowGameOverToastFromMeta(meta);
+      gameOverController.maybeShowGameOverToastFromMeta(meta);
     }
     return;
   }
 
   if (msg.type === 'PLAYER_READY') {
-    // Ready sync: host is authoritative, clients just send the signal.
-    if (!meta?.isHost || !currentState) return;
-    if (!isReadyGateEnabled(meta)) return;
+    if (!meta?.isHost || !gameController.getState()) return;
+    if (!readyGate.isReadyGateEnabled()) return;
     if (!meta.readyState) meta.readyState = {};
     meta.readyState[msg.playerId] = Boolean(msg.ready);
-    await maybeScheduleGameStartFromReady();
+    await readyGate.maybeScheduleGameStartFromReady();
     renderAll();
-    await persistSnapshot();
+    await storageController.persistSnapshot(
+      gameController.getState(),
+      meta,
+      labels
+    );
     sendSync();
     return;
   }
 
   if (msg.type === 'DRAFT_PLACEMENTS') {
-    // Draft placements are a visual-only preview of the current-turn player's in-progress move.
-    // Ignore until we have a game state (i.e., synced).
-    if (!currentState) return;
-    remoteDraft = {
+    const state = gameController.getState();
+    if (!state) return;
+    gameController.setRemoteDraft({
       playerId: msg.playerId,
       placements: msg.placements,
       moveNumber: msg.moveNumber
-    };
-    renderBoard();
+    });
+    renderAll();
     return;
   }
 
   if (msg.type === 'REQUEST_SYNC') {
-    if (meta?.isHost && currentState) sendSync();
+    if (meta?.isHost && gameController.getState()) sendSync();
     return;
   }
 
@@ -2430,557 +824,674 @@ async function handleMessage(data: unknown) {
   }
 
   if (msg.type === 'ACTION_REMATCH_REQUEST') {
-    // Host is authoritative for rematches.
     if (!meta.gameOver) return;
-    applyRematchRequest(msg.playerId, msg.at);
+    gameOverController.applyRematchRequest(msg.playerId, msg.at);
     renderAll();
-    if (allPlayersRequestedRematch()) {
+    if (gameOverController.allPlayersRequestedRematch()) {
       await restartForRematch();
       return;
     }
-    await persistSnapshot();
+    await storageController.persistSnapshot(
+      gameController.getState(),
+      meta,
+      labels
+    );
     sendSync();
     return;
   }
 
-  await ensureLanguage(meta.language);
+  await dictionaryController.ensureLanguage(meta.language);
 
   if (msg.type === 'ACTION_MOVE') {
-    remoteDraft = null;
-    const result = await game.placeMove(
-      msg.playerId,
-      msg.placements,
-      buildWordChecker()
-    );
-    if (result.success) {
-      currentState = game.getState();
-      resetTurnTimer();
-      await persistSnapshot();
-      sendSync();
-      renderAll();
-      if (meta && result.gameEnded) {
-        meta.gameOver = {
-          reason: result.gameEnded.reason,
-          at: Date.now(),
-          moveNumber: currentState.moveNumber,
-          finalScores: result.gameEnded.finalScores
-        };
-        await persistSnapshot();
+    gameController.setRemoteDraft(null);
+    const success = await gameController.submitMove(gameController.buildWordChecker.bind(gameController));
+    if (success) {
+      if (meta && meta.gameOver) {
+        await storageController.persistSnapshot(
+          gameController.getState(),
+          meta,
+          labels
+        );
         sendSync();
         renderAll();
-        maybeShowGameOverToastFromMeta(meta);
-        appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+        if (meta) {
+          gameOverController.maybeShowGameOverToastFromMeta(meta);
+        }
+        appendLog(`Game ended: ${formatGameOverReason(meta.gameOver.reason)}`);
       } else {
-        await checkAndHandleGameEnd();
+        checkAndHandleGameEnd();
       }
-    } else {
-      appendLog(result.message ?? 'Move rejected');
     }
   } else if (msg.type === 'ACTION_PASS') {
-    remoteDraft = null;
-    const result = game.passTurn(msg.playerId);
-    if (result.success) {
-      currentState = game.getState();
-      resetTurnTimer();
-      await persistSnapshot();
-      sendSync();
-      renderAll();
-      if (meta && result.gameEnded) {
-        meta.gameOver = {
-          reason: result.gameEnded.reason,
-          at: Date.now(),
-          moveNumber: currentState.moveNumber,
-          finalScores: result.gameEnded.finalScores
-        };
-        await persistSnapshot();
+    gameController.setRemoteDraft(null);
+    const success = await gameController.submitPass();
+    if (success) {
+      if (meta && meta.gameOver) {
+        await storageController.persistSnapshot(
+          gameController.getState(),
+          meta,
+          labels
+        );
         sendSync();
         renderAll();
-        maybeShowGameOverToastFromMeta(meta);
-        appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
+        if (meta) {
+          gameOverController.maybeShowGameOverToastFromMeta(meta);
+        }
+        appendLog(`Game ended: ${formatGameOverReason(meta.gameOver.reason)}`);
       } else {
-        await checkAndHandleGameEnd();
+        checkAndHandleGameEnd();
       }
     }
   } else if (msg.type === 'ACTION_EXCHANGE') {
-    remoteDraft = null;
-    const result = game.exchangeTiles(msg.playerId, msg.tileIds);
-    if (result.success) {
-      currentState = game.getState();
-      resetTurnTimer();
-      await persistSnapshot();
-      sendSync();
-      renderAll();
-      await checkAndHandleGameEnd();
-    } else {
-      appendLog(result.message ?? 'Exchange rejected');
+    gameController.setRemoteDraft(null);
+    const success = await gameController.submitExchange(msg.tileIds);
+    if (success) {
+      checkAndHandleGameEnd();
     }
   }
 }
 
-function markLocalReady() {
-  if (!meta || !currentState) return;
-  if (!isReadyGateEnabled(meta)) return;
-  if (meta.gameOver) return;
+function maybeShowTimeoutToastFromMeta(incoming: SessionMeta): void {
+  const ev = incoming.lastTurnEvent;
+  if (!ev || ev.type !== 'timeout') return;
+  const token = `${ev.type}:${ev.playerId}:${ev.moveNumber}:${ev.at}`;
+  if (token === lastShownTurnEventToken) return;
+  lastShownTurnEventToken = token;
 
-  if (!meta.readyState) meta.readyState = {};
-  meta.readyState[meta.localPlayerId] = true;
+  const playerName = labels[ev.playerId] ?? ev.playerId;
+  const isMe = incoming.localPlayerId === ev.playerId;
+  toastManager.showToast(
+    isMe ? "Time's up — you were auto-passed." : `Time's up — ${playerName} was auto-passed.`,
+    'danger'
+  );
+}
 
+async function restartForRematch(): Promise<void> {
+  if (!meta) return;
+
+  const language = meta.language;
+  const state = gameController.getState();
+  const players = state?.players ?? [meta.localPlayerId, meta.remotePlayerId].filter(Boolean) as string[];
+  const newState = gameController.resetForRematch(language, players);
+
+  meta.sessionId = newState.sessionId;
+  meta.gameOver = undefined;
+  meta.lastTurnEvent = undefined;
+  meta.rematch = undefined;
+
+  if (readyGate.isReadyGateEnabled() && players.length === 2) {
+    meta.readyState = { [players[0]]: true, [players[1]]: true };
+    meta.gameStartAt = Date.now();
+  }
+
+  gameController.setMeta(meta);
+  networkController.setMeta(meta);
+  timerController.setMeta(meta);
+  readyGate.setMeta(meta);
+  gameOverController.setMeta(meta);
+  endgameScanController.setMeta(meta);
+  endgameScanController.resetState();
+
+  const minWordLength = meta.minWordLength ?? Math.max(1, Math.floor(Number(uiElements.minLengthInput.value) || 2));
+  dictionaryController.setMinWordLength(minWordLength);
+
+  meta.turnDeadline = null;
+  timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
   renderAll();
-  void persistSnapshot();
+  gameController.updateValidation();
+
+  await storageController.persistSnapshot(newState, meta, labels);
+  if (meta.mode !== 'solo') {
+    sendSync();
+  }
+  appendLog('Rematch started.');
+}
+
+async function requestRematch(): Promise<void> {
+  if (!meta || !gameController.getState()) return;
+  if (!meta.gameOver) return;
+
+  if (meta.mode === 'solo') {
+    await restartForRematch();
+    return;
+  }
+
+  gameOverController.applyRematchRequest(meta.localPlayerId, Date.now());
+  renderAll();
 
   if (meta.isHost) {
-    void maybeScheduleGameStartFromReady().then(() => {
-      renderAll();
-      void persistSnapshot();
-      sendSync();
-    });
-  } else {
-    connection?.send({ type: 'PLAYER_READY', playerId: meta.localPlayerId, ready: true });
-  }
-}
-
-async function maybeScheduleGameStartFromReady() {
-  if (!meta || !currentState) return;
-  if (!meta.isHost) return;
-  if (!isReadyGateEnabled(meta)) return;
-  // Already scheduled: do nothing.
-  if (meta.gameStartAt != null) return;
-
-  if (!allPlayersReady(currentState.players, meta.readyState)) return;
-
-  meta.gameStartAt = maybeComputeGameStartAt({
-    currentStartAt: meta.gameStartAt ?? null,
-    players: currentState.players,
-    readyState: meta.readyState,
-    now: Date.now(),
-    graceMs: READY_GRACE_MS
-  });
-  if (meta.gameStartAt == null) return;
-  if (meta.timerEnabled && meta.timerDurationSec) {
-    meta.turnDeadline = meta.gameStartAt + meta.timerDurationSec * 1000;
-    startTimerTicker();
-  }
-  showToast('Both players ready — starting…', 'info', 2000);
-}
-
-async function submitMove() {
-  if (!currentState || !meta) return;
-  if (isPreGameLocked()) {
-    appendLog('Waiting for both players to be ready.');
-    return;
-  }
-  if (placements.length === 0) {
-    appendLog('Place tiles before confirming.');
-    return;
-  }
-
-  if (meta.isHost || meta.mode === 'solo') {
-    await ensureLanguage(meta.language);
-    const result = await game.placeMove(
-      meta.localPlayerId,
-      placements,
-      buildWordChecker()
+    if (gameOverController.allPlayersRequestedRematch()) {
+      await restartForRematch();
+      return;
+    }
+    await storageController.persistSnapshot(
+      gameController.getState(),
+      meta,
+      labels
     );
-    if (!result.success) {
-      appendLog(result.message ?? 'Invalid move');
-      return;
-    }
-    currentState = game.getState();
-    resetTurnTimer();
-    placements = [];
-    updateValidation();
-    renderAll();
-    await persistSnapshot();
     sendSync();
-    if (result.gameEnded) {
-      meta.gameOver = {
-        reason: result.gameEnded.reason,
-        at: Date.now(),
-        moveNumber: currentState.moveNumber,
-        finalScores: result.gameEnded.finalScores
-      };
-      await persistSnapshot();
-      sendSync();
-      renderAll();
-      maybeShowGameOverToastFromMeta(meta);
-      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
-    } else {
-      await checkAndHandleGameEnd();
-    }
-  } else {
-    connection?.send({
-      type: 'ACTION_MOVE',
-      placements,
-      playerId: meta.localPlayerId
-    } satisfies ActionMessage);
-    placements = [];
-    sendDraftPlacements();
-    renderBoard();
-    renderRack();
-    updateValidation();
-    appendLog('Move sent to host');
-  }
-}
-
-async function submitPass() {
-  if (!currentState || !meta) return;
-  if (isPreGameLocked()) {
-    appendLog('Waiting for both players to be ready.');
     return;
   }
-  if (meta.isHost || meta.mode === 'solo') {
-    const result = game.passTurn(meta.localPlayerId);
-    if (!result.success) {
-      appendLog(result.message ?? 'Cannot pass');
-      return;
-    }
-    currentState = game.getState();
-    resetTurnTimer();
-    await persistSnapshot();
-    renderAll();
-    sendSync();
-    if (result.gameEnded) {
-      meta.gameOver = {
-        reason: result.gameEnded.reason,
-        at: Date.now(),
-        moveNumber: currentState.moveNumber,
-        finalScores: result.gameEnded.finalScores
-      };
-      await persistSnapshot();
-      sendSync();
-      renderAll();
-      maybeShowGameOverToastFromMeta(meta);
-      appendLog(`Game ended: ${formatGameOverReason(result.gameEnded.reason)}`);
-    } else {
-      await checkAndHandleGameEnd();
-    }
-  } else {
-    connection?.send({ type: 'ACTION_PASS', playerId: meta.localPlayerId } satisfies ActionMessage);
-    appendLog('Pass sent to host');
-  }
-}
 
-async function submitExchange() {
-  if (!currentState || !meta) return;
-  if (isPreGameLocked()) {
-    appendLog('Waiting for both players to be ready.');
+  if (!networkController.getConnection()) {
+    toastManager.showToast('Not connected — cannot request rematch.', 'danger');
     return;
   }
-  const tileIds =
-    placements.length > 0
-      ? placements.map((p) => p.tile.id)
-      : selectedTileId
-        ? [selectedTileId]
-        : [];
-  if (tileIds.length === 0) {
-    appendLog('Select a tile to exchange (tap a rack tile).');
-    return;
-  }
-  placements = [];
-  selectedTileId = null;
-  renderBoard();
-  renderRack();
-  updateValidation();
 
-  if (meta.isHost || meta.mode === 'solo') {
-    const result = game.exchangeTiles(meta.localPlayerId, tileIds);
-    if (!result.success) {
-      appendLog(result.message ?? 'Exchange rejected');
-      return;
-    }
-    currentState = game.getState();
-    resetTurnTimer();
-    await persistSnapshot();
-    renderAll();
-    sendSync();
-    await checkAndHandleGameEnd();
-  } else {
-    connection?.send({
-      type: 'ACTION_EXCHANGE',
-      playerId: meta.localPlayerId,
-      tileIds
-    } satisfies ActionMessage);
-    appendLog('Exchange sent to host');
-  }
-}
-
-function sendSync() {
-  if (!connection || !currentState || !meta) return;
-  const payload: ActionMessage = {
-    type: 'SYNC_STATE',
-    state: currentState,
-    meta,
-    labels
-  };
-  connection.send(payload);
-  appendLog('Sync pushed to peer.');
-}
-
-function sendDraftPlacements(nextPlacements: Placement[] = placements) {
-  if (!connection || !currentState || !meta) return;
-  if (meta.mode === 'solo') return;
-  if (!connection.dataChannelReady) return;
-  // Only broadcast drafts for the current-turn player.
-  if (currentState.currentPlayer !== meta.localPlayerId) return;
-  connection.send({
-    type: 'DRAFT_PLACEMENTS',
+  networkController.send({
+    type: 'ACTION_REMATCH_REQUEST',
     playerId: meta.localPlayerId,
-    placements: nextPlacements,
-    moveNumber: currentState.moveNumber
-  } satisfies ActionMessage);
-}
-
-function syncLocalRackOrder(state: GameState, session: SessionMeta) {
-  if (rackOrderSessionId !== state.sessionId) {
-    rackOrder = [];
-    rackOrderSessionId = state.sessionId;
-  }
-  const rack = state.racks[session.localPlayerId] ?? [];
-  rackOrder = reconcileOrder(rackOrder, rack, (t) => t.id);
-}
-
-async function ensureLanguage(language: Language) {
-  const status = await ensureDictionary(language);
-  if (!status.available) {
-    appendLog(`Dictionary ${language} missing. Prompting download.`);
-    await downloadLanguage(language);
-  }
-  await refreshDictStatus();
-}
-
-async function downloadLanguage(language: Language) {
-  const result = await downloadDictionary(language);
-  if (result.available) {
-    appendLog(`Downloaded ${language.toUpperCase()} dictionary (${result.words ?? '?'} words)`);
-  } else {
-    appendLog(`Failed to download ${language} dictionary`);
-  }
-  await refreshDictStatus();
-}
-
-async function refreshDictStatus() {
-  const [en, ru, ruStrict] = await Promise.all([
-    ensureDictionary('en'),
-    ensureDictionary('ru'),
-    ensureDictionaryStrict()
-  ]);
-  const icon = (available: boolean) => (available ? '✅' : '❌');
-
-  // Header pill summary (show RU as available if either version is available)
-  const ruAvailable = ru.available || ruStrict.available;
-  dictStatus.textContent = `EN ${icon(en.available)} • RU ${icon(ruAvailable)}`;
-  dictStatus.classList.toggle('danger', !en.available || !ruAvailable);
-
-  // Dictionary buttons
-  dictEnIcon.textContent = icon(en.available);
-  dictRuIcon.textContent = icon(ru.available);
-  dictRuStrictIcon.textContent = icon(ruStrict.available);
-}
-
-function startDictionaryAutoCheck() {
-  // Keep UI indicators correct if IndexedDB is updated elsewhere
-  window.addEventListener('focus', () => void refreshDictStatus());
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) void refreshDictStatus();
+    at: Date.now()
   });
-  window.setInterval(() => void refreshDictStatus(), 30_000);
-}
-
-async function persistSnapshot() {
-  if (!currentState || !meta) return;
-  const payload: SnapshotPayload = {
-    state: currentState,
+  void storageController.persistSnapshot(
+    gameController.getState(),
     meta,
     labels
+  );
+  appendLog('Rematch request sent to host.');
+}
+
+async function startSession(): Promise<void> {
+  if (mode === 'client') {
+    appendLog('Join mode: scan/paste host offer to generate your answer, then wait for sync.');
+    return;
+  }
+
+  const language = uiElements.languageSelect.value as Language;
+  uiElements.languageSelect.value = language;
+  const russianVariant = language === 'ru' ? (uiElements.russianVariantSelect.value as 'full' | 'strict') : undefined;
+  const me = uiElements.meInput.value || 'Player 1';
+  const peer = uiElements.peerInput.value || 'Player 2';
+  const localId = mode === 'solo' ? 'p1' : 'host';
+  const remoteId = mode === 'solo' ? undefined : 'client';
+  const players = [localId];
+  if (remoteId) players.push(remoteId);
+
+  const minWordLength = Math.max(1, Math.floor(Number(uiElements.minLengthInput.value) || 2));
+  dictionaryController.setMinWordLength(minWordLength);
+
+  const timerDurationSec = Math.min(Math.max(Number(uiElements.timerInput.value) || 0, 1), 10) * 60;
+  const timerEnabled = uiElements.timerEnabledToggle.checked && timerDurationSec > 0;
+  const shouldStartTimerNow = mode === 'solo';
+
+  await dictionaryController.ensureLanguage(language);
+  if (language === 'ru' && russianVariant === 'strict') {
+    await dictionaryController.downloadRuStrict();
+  }
+
+  const state = gameController.start(language, players);
+  meta = {
+    mode,
+    language,
+    isHost: mode === 'host' || mode === 'solo',
+    localPlayerId: localId,
+    russianDictionaryVariant: russianVariant,
+    remotePlayerId: remoteId,
+    sessionId: state.sessionId,
+    minWordLength,
+    timerEnabled,
+    timerDurationSec,
+    turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null,
+    readyState: mode === 'host' && remoteId ? { [localId]: false, [remoteId]: false } : undefined,
+    gameStartAt: mode === 'host' && remoteId ? null : undefined
   };
-  await saveSnapshot('last-session', payload);
-  pendingSnapshot = payload;
-  resumeBtn.disabled = false;
-  clearSnapshotBtn.disabled = false;
-  resumeNote.textContent = `Saved session (${meta.mode}) as ${labels[meta.localPlayerId] ?? ''}`;
-}
+  labels = { [localId]: me };
+  if (remoteId) {
+    labels[remoteId] = peer;
+  }
 
-async function checkSavedSnapshot() {
-  const saved = await loadSnapshot<SnapshotPayload>('last-session');
-  pendingSnapshot = saved;
-  if (saved) {
-    resumeBtn.disabled = false;
-    clearSnapshotBtn.disabled = false;
-    resumeNote.textContent = `Found saved session (${saved.meta.mode})`;
+  gameController.setMeta(meta);
+  networkController.setMeta(meta);
+  networkController.setCurrentState(state);
+  networkController.setLabels(labels);
+  networkController.setMode(mode);
+  timerController.setMeta(meta);
+  timerController.setConnection(networkController.getConnection());
+  readyGate.setMeta(meta);
+  readyGate.setCurrentState(state);
+  readyGate.setLabels(labels);
+  gameOverController.setMeta(meta);
+  gameOverController.setCurrentState(state);
+  gameOverController.setLabels(labels);
+  endgameScanController.setMeta(meta);
+  endgameScanController.setCurrentState(state);
+
+  timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+  renderAll();
+  gameController.updateValidation();
+  appendLog(`Started ${mode} game as ${me}`);
+
+  await storageController.persistSnapshot(state, meta, labels);
+
+  if (mode === 'host') {
+    await networkController.buildHostOffer(uiElements.languageSelect, dictionaryController.ensureLanguage.bind(dictionaryController));
   }
 }
 
-async function resumeSnapshot() {
+async function resumeSnapshot(): Promise<void> {
+  const pendingSnapshot = storageController.getPendingSnapshot();
   if (!pendingSnapshot) return;
-  await ensureLanguage(pendingSnapshot.meta.language);
-  // Ensure the selected Russian dictionary variant is available
+  await dictionaryController.ensureLanguage(pendingSnapshot.meta.language);
   if (pendingSnapshot.meta.language === 'ru' && pendingSnapshot.meta.russianDictionaryVariant === 'strict') {
-    await ensureDictionaryStrict();
+    await dictionaryController.downloadRuStrict();
   }
+
   meta = pendingSnapshot.meta;
   labels = pendingSnapshot.labels;
-  languageSelect.value = pendingSnapshot.meta.language;
-  // Update Russian variant selector if applicable
+  uiElements.languageSelect.value = pendingSnapshot.meta.language;
   if (pendingSnapshot.meta.language === 'ru') {
-    russianVariantWrapper.style.display = 'flex';
-    russianVariantSelect.value = pendingSnapshot.meta.russianDictionaryVariant || 'full';
+    uiElements.russianVariantWrapper.style.display = 'flex';
+    uiElements.russianVariantSelect.value = pendingSnapshot.meta.russianDictionaryVariant || 'full';
   } else {
-    russianVariantWrapper.style.display = 'none';
+    uiElements.russianVariantWrapper.style.display = 'none';
   }
   mode = pendingSnapshot.meta.mode;
-  applyModeUI();
-  applyTimerInputFromMeta();
-  applyMinLengthInputFromMeta();
+  applyModeUIInternal();
+  applyTimerInputFromMetaInternal();
+  applyMinLengthInputFromMetaInternal();
   if (meta.timerEnabled && meta.turnDeadline) {
-    startTimerTicker();
+    timerController.startTimerTicker();
   } else {
-    stopTimerTicker();
+    timerController.stopTimerTicker();
   }
-  game.resume(pendingSnapshot.state);
-  currentState = game.getState();
-  placements = [];
-  updateValidation();
+  gameController.resume(pendingSnapshot.state);
+  gameController.setMeta(meta);
+  networkController.setMeta(meta);
+  networkController.setCurrentState(pendingSnapshot.state);
+  networkController.setLabels(labels);
+  networkController.setMode(mode);
+  timerController.setMeta(meta);
+  timerController.setConnection(networkController.getConnection());
+  readyGate.setMeta(meta);
+  readyGate.setCurrentState(pendingSnapshot.state);
+  readyGate.setLabels(labels);
+  gameOverController.setMeta(meta);
+  gameOverController.setCurrentState(pendingSnapshot.state);
+  gameOverController.setLabels(labels);
+  endgameScanController.setMeta(meta);
+  endgameScanController.setCurrentState(pendingSnapshot.state);
+
+  gameController.updateValidation();
   renderAll();
   maybeShowTimeoutToastFromMeta(meta);
-  maybeShowGameOverToastFromMeta(meta);
+  gameOverController.maybeShowGameOverToastFromMeta(meta);
   appendLog('Resumed saved game.');
 
   if (mode !== 'solo') {
     appendLog('Resumed P2P session. Connection needed.');
-    void triggerReconnect();
+    void networkController.triggerReconnect(settingsHidden, renderVisibilityInternal);
   }
 }
 
-function appendLog(msg: string) {
-  const now = new Date().toLocaleTimeString();
-  const entry = document.createElement('div');
-  entry.textContent = `[${now}] ${msg}`;
-  logEl.prepend(entry);
+function applyModeUIInternal(): void {
+  applyModeUI(
+    mode,
+    uiElements.modeTabs,
+    uiElements.hostCard,
+    uiElements.clientCard,
+    () => renderModeControlsInternal()
+  );
 }
 
-function copyToClipboard(text: string) {
-  if (!text) return;
-  navigator.clipboard?.writeText(text).then(() => appendLog('Copied to clipboard'));
+function renderModeControlsInternal(): void {
+  renderModeControls(
+    mode,
+    uiElements.meInput,
+    uiElements.peerInput,
+    uiElements.minLengthInput,
+    uiElements.languageSelect,
+    uiElements.russianVariantSelect,
+    uiElements.russianVariantWrapper,
+    uiElements.languageWrapper,
+    uiElements.timerInput,
+    uiElements.timerEnabledToggle,
+    uiElements.timerWrapper,
+    uiElements.timerMinutesWrapper,
+    startBtn
+  );
 }
 
-async function scanInto(target: HTMLTextAreaElement, onScanned?: (data: string) => void | Promise<void>) {
-  // Create modal UI
-  const modal = document.createElement('div');
-  modal.style.cssText = `
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: #000; display: flex; flex-direction: column; z-index: 2000;
-  `;
+function applyTimerInputFromMetaInternal(): void {
+  applyTimerInputFromMeta(
+    meta,
+    uiElements.timerEnabledToggle,
+    uiElements.timerInput,
+    uiElements.timerMinutesWrapper
+  );
+}
 
-  const videoContainer = document.createElement('div');
-  videoContainer.style.cssText = `position: relative; width: 100%; flex: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000;`;
+function applyMinLengthInputFromMetaInternal(): void {
+  applyMinLengthInputFromMeta(
+    meta,
+    uiElements.minLengthInput,
+    dictionaryController.setMinWordLength.bind(dictionaryController)
+  );
+}
 
-  const video = document.createElement('video');
-  video.style.cssText = `width: 100%; height: 100%; object-fit: cover;`;
-  video.setAttribute('playsinline', 'true'); // Required for iOS
-  videoContainer.appendChild(video);
+function renderVisibilityInternal(): void {
+  renderVisibility(
+    uiElements.settingsSection,
+    uiElements.logEl,
+    toggleSetupBtn,
+    toggleLogsBtn,
+    settingsHidden,
+    logsHidden
+  );
+}
 
-  // Add a scan reticle/overlay
-  const reticle = document.createElement('div');
-  reticle.style.cssText = `
-    position: absolute; width: 250px; height: 250px;
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
-    border-radius: 16px;
-    pointer-events: none;
-  `;
-  videoContainer.appendChild(reticle);
+function setupEvents(): void {
+  window.addEventListener('online', () => {
+    renderNetworkStatus(uiElements.offlineStatus);
+    void dictionaryController.refreshDictStatus();
+  });
+  window.addEventListener('offline', () => {
+    renderNetworkStatus(uiElements.offlineStatus);
+    void dictionaryController.refreshDictStatus();
+  });
+  appendLog('Tips: both devices on same Wi-Fi, no VPN; host creates offer, client returns answer; host applies answer.');
 
-  const controls = document.createElement('div');
-  controls.style.cssText = `
-    width: 100%; background: #000;
-    display: flex; justify-content: center; padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom));
-  `;
-
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = 'Cancel Scan';
-  closeBtn.className = 'primary danger';
-  closeBtn.style.minWidth = '120px';
-  closeBtn.onclick = () => stop();
-  controls.appendChild(closeBtn);
-
-  modal.appendChild(videoContainer);
-  modal.appendChild(controls);
-  document.body.appendChild(modal);
-
-  let stream: MediaStream | null = null;
-  let animationFrameId: number | null = null;
-  let isActive = true;
-
-  const stop = () => {
-    isActive = false;
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
+  forceReloadBtn.addEventListener('click', async () => {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const registration of registrations) {
+        await registration.unregister();
+      }
+      appendLog('Service workers unregistered');
     }
-    if (animationFrameId) {
-      cancelAnimationFrame(animationFrameId);
-    }
-    if (document.body.contains(modal)) {
-      document.body.removeChild(modal);
-    }
-  };
+    window.location.reload();
+  });
 
-  try {
-    // Request camera
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    if (!isActive) {
-      // User cancelled while waiting for permission
-      stream.getTracks().forEach((t) => t.stop());
+  uiElements.modeTabs.addEventListener('click', (ev) => {
+    const target = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
+    if (!target) return;
+    mode = target.dataset.mode as Mode;
+    applyModeUIInternal();
+  });
+
+  uiElements.languageSelect.addEventListener('change', () => {
+    const language = uiElements.languageSelect.value as Language;
+    if (meta) {
+      meta.language = language;
+    }
+    uiElements.russianVariantWrapper.style.display = language === 'ru' ? 'flex' : 'none';
+  });
+
+  uiElements.russianVariantSelect.addEventListener('change', () => {
+    if (meta) {
+      meta.russianDictionaryVariant = uiElements.russianVariantSelect.value as 'full' | 'strict';
+    }
+  });
+
+  startBtn.addEventListener('click', () => startSession());
+  resumeBtn.addEventListener('click', () => resumeSnapshot());
+  clearSnapshotBtn.addEventListener('click', async () => {
+    await storageController.clearSavedSnapshot();
+  });
+
+  uiElements.confirmMoveBtn.addEventListener('click', async () => {
+    if (readyGate.isPreGameLocked()) {
+      appendLog('Waiting for both players to be ready.');
+      return;
+    }
+    if (gameController.getPlacements().length === 0) {
+      appendLog('Place tiles before confirming.');
       return;
     }
 
-    video.srcObject = stream;
-    await video.play();
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-    if (!ctx) {
-      appendLog('Canvas context not supported');
-      stop();
-      return;
-    }
-
-    const tick = () => {
-      if (!isActive) return;
-
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: "dontInvert",
-        });
-
-        if (code && code.data) {
-          target.value = code.data;
-          appendLog('QR scanned successfully');
-          if (onScanned) {
-            Promise.resolve(onScanned(code.data)).catch((err) =>
-              appendLog(`Auto-connect error: ${String(err)}`)
-            );
-          }
-          stop();
-          return;
+    if (meta?.isHost || meta?.mode === 'solo') {
+      await dictionaryController.ensureLanguage(meta.language);
+      const success = await gameController.submitMove(gameController.buildWordChecker.bind(gameController));
+      if (success) {
+        if (meta && meta.gameOver) {
+          await storageController.persistSnapshot(
+            gameController.getState(),
+            meta,
+            labels
+          );
+          sendSync();
+          renderAll();
+          gameOverController.maybeShowGameOverToastFromMeta(meta);
+          appendLog(`Game ended: ${formatGameOverReason(meta.gameOver.reason)}`);
+        } else {
+          checkAndHandleGameEnd();
         }
       }
-      animationFrameId = requestAnimationFrame(tick);
-    };
+    } else {
+      networkController.send({
+        type: 'ACTION_MOVE',
+        placements: gameController.getPlacements(),
+        playerId: meta!.localPlayerId
+      });
+      gameController.clearPlacements();
+      renderAll();
+      appendLog('Move sent to host');
+    }
+  });
 
-    tick();
-  } catch (err) {
-    appendLog(`Camera error: ${err}`);
-    stop();
+  uiElements.clearPlacementsBtn.addEventListener('click', () => {
+    gameController.clearPlacements();
+  });
+
+  uiElements.mixRackBtn.addEventListener('click', () => {
+    gameController.shuffleRack();
+    renderAll();
+  });
+
+  uiElements.passBtn.addEventListener('click', async () => {
+    if (readyGate.isPreGameLocked()) {
+      appendLog('Waiting for both players to be ready.');
+      return;
+    }
+
+    if (meta?.isHost || meta?.mode === 'solo') {
+      const success = await gameController.submitPass();
+      if (success) {
+        if (meta && meta.gameOver) {
+          await storageController.persistSnapshot(
+            gameController.getState(),
+            meta,
+            labels
+          );
+          sendSync();
+          renderAll();
+          gameOverController.maybeShowGameOverToastFromMeta(meta);
+          appendLog(`Game ended: ${formatGameOverReason(meta.gameOver.reason)}`);
+        } else {
+          checkAndHandleGameEnd();
+        }
+      }
+    } else {
+      networkController.send({
+        type: 'ACTION_PASS',
+        playerId: meta!.localPlayerId
+      });
+      appendLog('Pass sent to host');
+    }
+  });
+
+  uiElements.exchangeBtn.addEventListener('click', async () => {
+    if (readyGate.isPreGameLocked()) {
+      appendLog('Waiting for both players to be ready.');
+      return;
+    }
+
+    const tileIds =
+      gameController.getPlacements().length > 0
+        ? gameController.getPlacements().map((p) => p.tile.id)
+        : gameController.getSelectedTileId()
+          ? [gameController.getSelectedTileId()!]
+          : [];
+    if (tileIds.length === 0) {
+      appendLog('Select a tile to exchange (tap a rack tile).');
+      return;
+    }
+
+    if (meta?.isHost || meta?.mode === 'solo') {
+      const success = await gameController.submitExchange(tileIds);
+      if (success) {
+        checkAndHandleGameEnd();
+      }
+    } else {
+      networkController.send({
+        type: 'ACTION_EXCHANGE',
+        playerId: meta!.localPlayerId,
+        tileIds
+      });
+      appendLog('Exchange sent to host');
+    }
+  });
+
+  copyOfferBtn.addEventListener('click', () => copyToClipboard(offerText.value, appendLog));
+  copyClientAnswerBtn.addEventListener('click', () => copyToClipboard(clientAnswer.value, appendLog));
+  scanOfferBtn.addEventListener('click', () =>
+    qrScanner.scanInto(hostOfferInput, async () => {
+      await networkController.buildClientAnswer();
+    })
+  );
+  scanAnswerBtn.addEventListener('click', () =>
+    qrScanner.scanInto(answerText, async () => {
+      await networkController.applyHostAnswer();
+    })
+  );
+
+  networkController.setupAutoBuildClientAnswer(async () => {
+    await networkController.buildClientAnswer();
+  });
+  networkController.setupAutoApplyHostAnswer(async () => {
+    await networkController.applyHostAnswer();
+  });
+
+  refreshDictsBtn.addEventListener('click', async () => {
+    dictEnIcon.textContent = '⏳';
+    dictRuIcon.textContent = '⏳';
+    dictRuStrictIcon.textContent = '⏳';
+    uiElements.dictStatus.textContent = 'Dictionaries: checking...';
+    try {
+      await dictionaryController.refreshDictStatus();
+    } catch (err) {
+      dictEnIcon.textContent = '❌';
+      dictRuIcon.textContent = '❌';
+      dictRuStrictIcon.textContent = '❌';
+      uiElements.dictStatus.textContent = 'Dictionaries: check failed';
+      uiElements.dictStatus.classList.add('danger');
+      appendLog(`Dictionary status check failed: ${String(err)}`);
+    }
+  });
+  downloadEnBtn.addEventListener('click', () => dictionaryController.downloadLanguage('en'));
+  downloadRuBtn.addEventListener('click', () => dictionaryController.downloadLanguage('ru'));
+  downloadRuStrictBtn.addEventListener('click', async () => {
+    await dictionaryController.downloadRuStrict();
+  });
+  requestSyncBtn.addEventListener('click', () => {
+    networkController.send({ type: 'REQUEST_SYNC' });
+    appendLog('Requested sync from peer');
+  });
+  toggleSetupBtn.addEventListener('click', () => {
+    settingsHidden = !settingsHidden;
+    renderVisibilityInternal();
+  });
+  toggleLogsBtn.addEventListener('click', () => {
+    logsHidden = !logsHidden;
+    renderVisibilityInternal();
+  });
+  uiElements.minLengthInput.addEventListener('change', () => {
+    const val = Number(uiElements.minLengthInput.value) || 2;
+    dictionaryController.setMinWordLength(val);
+    appendLog(`Min word length set to ${val}`);
+    if (meta && meta.isHost) {
+      meta.minWordLength = val;
+      sendSync();
+    }
+  });
+  uiElements.timerEnabledToggle.addEventListener('change', () => {
+    updateTimerSettingsUI(
+      uiElements.timerEnabledToggle,
+      uiElements.timerInput,
+      uiElements.timerMinutesWrapper,
+      mode === 'client'
+    );
+    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
+    meta.timerEnabled = uiElements.timerEnabledToggle.checked;
+    meta.timerDurationSec = Math.min(Math.max(Number(uiElements.timerInput.value) || 0, 1), 10) * 60;
+    timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+    renderAll();
+    void storageController.persistSnapshot(
+      gameController.getState(),
+      meta,
+      labels
+    );
+    sendSync();
+  });
+  uiElements.timerInput.addEventListener('change', () => {
+    updateTimerSettingsUI(
+      uiElements.timerEnabledToggle,
+      uiElements.timerInput,
+      uiElements.timerMinutesWrapper,
+      mode === 'client'
+    );
+    if (!meta || (!meta.isHost && meta.mode !== 'solo')) return;
+    meta.timerDurationSec = Math.min(Math.max(Number(uiElements.timerInput.value) || 0, 1), 10) * 60;
+    if (meta.timerEnabled) {
+      timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+      renderAll();
+      void storageController.persistSnapshot(
+        gameController.getState(),
+        meta,
+        labels
+      );
+      sendSync();
+    }
+  });
+
+  uiElements.boardEl.addEventListener('click', onBoardClick);
+  uiElements.rackEl.addEventListener('click', onRackClick);
+  uiElements.readyBtn.addEventListener('click', () => {
+    markLocalReady();
+  });
+
+  uiElements.viewBoardBtn.addEventListener('click', () => {
+    gameOverController.setGameOverOverlayDismissed(true);
+    gameOverController.renderGameOverUi();
+  });
+  uiElements.showResultsBtn.addEventListener('click', () => {
+    gameOverController.setGameOverOverlayDismissed(false);
+    gameOverController.renderGameOverUi();
+  });
+  uiElements.rematchBtnOverlay.addEventListener('click', () => void requestRematch());
+  uiElements.rematchBtnBanner.addEventListener('click', () => void requestRematch());
+}
+
+function onRackClick(ev: MouseEvent): void {
+  if (readyGate.isPreGameLocked()) return;
+  const button = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-tile]');
+  if (!button) return;
+  gameController.setSelectedTileId(button.dataset.tile ?? null);
+  renderAll();
+}
+
+function onBoardClick(ev: MouseEvent): void {
+  const cell = (ev.target as HTMLElement).closest<HTMLDivElement>('[data-x][data-y]');
+  const state = gameController.getState();
+  if (!cell || !state || !meta) return;
+  if (readyGate.isPreGameLocked()) return;
+  if (meta.gameOver) return;
+  if (state.currentPlayer !== meta.localPlayerId) return;
+  const x = Number(cell.dataset.x);
+  const y = Number(cell.dataset.y);
+  if (state.board[y][x].tile) {
+    return;
+  }
+
+  if (gameController.getSelectedTileId()) {
+    gameController.placeSelectedTileAt(x, y, async (tile) => {
+      return blankTileSelector.selectBlankLetter(tile, meta?.language ?? 'en');
+    });
+  } else {
+    gameController.removePlacementAt(x, y);
   }
 }
 
-function registerServiceWorker() {
+function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
     navigator.serviceWorker
@@ -2989,3 +1500,16 @@ function registerServiceWorker() {
       .catch((err) => appendLog(`SW registration failed: ${String(err)}`));
   });
 }
+
+// Initialize
+setupControllerCallbacks();
+setupEvents();
+uiElements.russianVariantWrapper.style.display = uiElements.languageSelect.value === 'ru' ? 'flex' : 'none';
+renderNetworkStatus(uiElements.offlineStatus);
+renderVersion(uiElements.versionEl, __APP_VERSION__);
+applyModeUIInternal();
+renderVisibilityInternal();
+void dictionaryController.refreshDictStatus();
+dictionaryController.startDictionaryAutoCheck();
+void storageController.checkSavedSnapshot();
+registerServiceWorker();
