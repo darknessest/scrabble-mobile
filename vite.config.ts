@@ -12,7 +12,7 @@ const repoName = process.env.GITHUB_REPOSITORY?.split('/').pop();
 const base =
   process.env.VITE_BASE_PATH ??
   (process.env.GITHUB_ACTIONS && repoName ? `/${repoName}/` : '/');
-const defaultRepo = process.env.GITHUB_REPOSITORY || 'darknessest/scrabble-wpa';
+const defaultRepo = process.env.GITHUB_REPOSITORY || 'darknessest/scrabble-mobile';
 
 const DEV_DICT_BASE_PATH = '/dev-dicts';
 const DEV_DICT_MOCK_BASE_PATH = '/dev-dicts-mock';
@@ -45,7 +45,7 @@ function getVersion() {
 }
 
 function dictionarySources(repo: string): DictionarySource[] {
-  const baseUrl = `https://raw.githubusercontent.com/${repo}/assets/dicts`;
+  const baseUrl = ` https://github.com/${repo}/raw/refs/heads/assets/dicts`;
   return [
     { filename: 'en.json.gz', url: `${baseUrl}/en.json.gz` },
     { filename: 'ru.json.gz', url: `${baseUrl}/ru.json.gz` },
@@ -104,7 +104,7 @@ async function downloadFile(url: string, dest: string) {
         pipeline(response, fileStream)
           .then(() => resolve())
           .catch((err) => {
-            void fs.promises.unlink(dest).catch(() => {});
+            void fs.promises.unlink(dest).catch(() => { });
             reject(err);
           });
       })

@@ -27,10 +27,10 @@ const BASE = import.meta.env.BASE_URL ?? '/';
 
 // GitHub repository for dictionary assets
 // Can be set via VITE_GITHUB_REPO environment variable during build
-// Format: owner/repo-name (e.g., 'darknessest/scrabble-wpa')
-// If not set, defaults to 'darknessest/scrabble-wpa'
+// Format: owner/repo-name (e.g., 'darknessest/scrabble-mobile')
+// If not set, defaults to 'darknessest/scrabble-mobile'
 // The workflow automatically uses the current repository
-const GITHUB_REPO = import.meta.env.VITE_GITHUB_REPO || 'darknessest/scrabble-wpa';
+const GITHUB_REPO = import.meta.env.VITE_GITHUB_REPO || 'darknessest/scrabble-mobile';
 const ASSETS_BRANCH = 'assets';
 const DEFAULT_ASSETS_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}/${ASSETS_BRANCH}/dicts`;
 
