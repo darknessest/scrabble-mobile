@@ -80,7 +80,7 @@ export class ScrabbleGame {
   /**
    * Check if the game should be considered ended right now (dynamic; does not mutate state).
    */
-  async checkGameEnd(checkWord: WordChecker): Promise<{ ended: boolean; reason?: GameEndReason }> {
+  async checkGameEnd(checkWord: WordChecker, minWordLength?: number): Promise<{ ended: boolean; reason?: GameEndReason }> {
     const state = this.getState();
 
     // Condition 1: 4 consecutive passes (P1,P2,P1,P2) => end.
@@ -96,12 +96,12 @@ export class ScrabbleGame {
 
     if (state.bag.length !== 0) return { ended: false };
 
-    const allStuck = await this.checkAllPlayersHaveNoValidMoves(checkWord);
+    const allStuck = await this.checkAllPlayersHaveNoValidMoves(checkWord, minWordLength);
     if (allStuck) return { ended: true, reason: 'no_moves_bag_empty' };
     return { ended: false };
   }
 
-  async checkAllPlayersHaveNoValidMoves(checkWord: WordChecker): Promise<boolean> {
+  async checkAllPlayersHaveNoValidMoves(checkWord: WordChecker, minWordLength?: number): Promise<boolean> {
     const state = this.getState();
     const words = await resolveAllWords(checkWord, state.language);
     // If we can't access the full dictionary, we refuse to declare "no moves" to avoid false positives.
@@ -111,25 +111,26 @@ export class ScrabbleGame {
     const boardIsEmpty = !boardHasAnyTiles(state.board);
 
     for (const playerId of state.players) {
-      const hasAny = await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord);
+      const hasAny = await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord, minWordLength);
       if (hasAny) return false;
     }
     return true;
   }
 
-  async hasValidMoves(playerId: string, checkWord: WordChecker): Promise<boolean> {
+  async hasValidMoves(playerId: string, checkWord: WordChecker, minWordLength?: number): Promise<boolean> {
     const state = this.getState();
     const words = await resolveAllWords(checkWord, state.language);
     if (!words) return true;
     const anchors = computeAnchors(state.board);
     const boardIsEmpty = !boardHasAnyTiles(state.board);
-    return await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord);
+    return await hasValidMovesWithWords(state, playerId, anchors, boardIsEmpty, words, checkWord, minWordLength);
   }
 
   async placeMove(
     playerId: string,
     placements: Placement[],
-    checkWord: WordChecker
+    checkWord: WordChecker,
+    minWordLength?: number
   ): Promise<MoveResult> {
     const state = this.getState();
     if (state.currentPlayer !== playerId) {
@@ -174,7 +175,8 @@ export class ScrabbleGame {
         placements,
         orientation,
         state.language,
-        checkWord
+        checkWord,
+        minWordLength
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Invalid move';
@@ -216,7 +218,7 @@ export class ScrabbleGame {
       timestamp: Date.now()
     });
 
-    const ended = await this.checkGameEnd(checkWord);
+    const ended = await this.checkGameEnd(checkWord, minWordLength);
     if (ended.ended && ended.reason) {
       this.applyEndGameScoring();
       return {
@@ -321,7 +323,8 @@ async function hasValidMovesWithWords(
   anchors: Anchor[],
   boardIsEmpty: boolean,
   words: Iterable<string>,
-  checkWord: WordChecker
+  checkWord: WordChecker,
+  minWordLength?: number
 ): Promise<boolean> {
   const rack = state.racks[playerId] ?? [];
   if (rack.length === 0) return false;
@@ -401,7 +404,7 @@ async function hasValidMovesWithWords(
           // First move must cover center; anchors already ensure this, but keep as safety.
           if (boardIsEmpty && !placements.some((p) => p.x === 7 && p.y === 7)) continue;
 
-          const ok = await validateMoveOnState(state, playerId, placements, checkWord);
+          const ok = await validateMoveOnState(state, playerId, placements, checkWord, minWordLength);
           if (ok) return true;
         }
       }
@@ -414,7 +417,8 @@ async function validateMoveOnState(
   state: GameState,
   playerId: string,
   placements: Placement[],
-  checkWord: WordChecker
+  checkWord: WordChecker,
+  minWordLength?: number
 ): Promise<boolean> {
   if (placements.length === 0) return false;
   if (!placements.every((p) => inBounds(p.x) && inBounds(p.y))) return false;
@@ -430,7 +434,7 @@ async function validateMoveOnState(
   if (!isContiguous(state.board, placements, orientation)) return false;
 
   try {
-    const result = await computeScore(state.board, placements, orientation, state.language, checkWord);
+    const result = await computeScore(state.board, placements, orientation, state.language, checkWord, minWordLength);
     return result.words.length > 0;
   } catch {
     return false;
@@ -556,7 +560,8 @@ async function computeScore(
   placements: Placement[],
   orientation: Orientation,
   language: Language,
-  checkWord: WordChecker
+  checkWord: WordChecker,
+  minWordLength?: number
 ): Promise<{ words: string[]; score: number }> {
   const tempBoard = board.map((row) => row.map((cell) => ({ ...cell })));
   placements.forEach((p) => {
@@ -566,6 +571,11 @@ async function computeScore(
   const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
 
   const formedWords = collectFormedWords(tempBoard, placements, orientation);
+
+  // Min word length only applies to the primary word (first entry), not crosswords
+  if (minWordLength && formedWords.length > 0 && formedWords[0].word.length < minWordLength) {
+    throw new Error(`Invalid word: ${formedWords[0].word}`);
+  }
 
   for (const { word } of formedWords) {
     const valid = await checkWord(word, language);

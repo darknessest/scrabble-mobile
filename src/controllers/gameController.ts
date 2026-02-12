@@ -221,7 +221,8 @@ export class GameController {
             const result = await this.game.placeMove(
                 meta.localPlayerId,
                 this.placements,
-                buildWordChecker()
+                buildWordChecker(),
+                meta.minWordLength
             );
             if (!result.success) {
                 this.appendLog(result.message ?? 'Invalid move');
@@ -229,6 +230,7 @@ export class GameController {
             }
             this.currentState = this.game.getState();
             this.placements = [];
+            if (meta.timerEnabled) meta.turnDeadline = null;
             this.updateValidation();
             this.onRenderAll();
             void this.onPersist();
@@ -263,6 +265,7 @@ export class GameController {
                 return false;
             }
             this.currentState = this.game.getState();
+            if (meta.timerEnabled) meta.turnDeadline = null;
             this.onRenderAll();
             void this.onPersist();
             this.onSync();
@@ -296,6 +299,10 @@ export class GameController {
                 return false;
             }
             this.currentState = this.game.getState();
+            this.placements = [];
+            this.selectedTileId = null;
+            if (meta.timerEnabled) meta.turnDeadline = null;
+            this.updateValidation();
             this.onRenderAll();
             void this.onPersist();
             this.onSync();
@@ -333,6 +340,7 @@ export class GameController {
                 at: Date.now(),
                 moveNumber: state.moveNumber
             };
+            meta.turnDeadline = null;
             if (timedOutPlayerId === meta.localPlayerId) {
                 this.placements = [];
                 this.selectedTileId = null;
@@ -392,7 +400,8 @@ export class GameController {
         const result = await preview.placeMove(
             meta.localPlayerId,
             this.placements,
-            (word, lang) => hasWord(word, lang)
+            (word, lang) => hasWord(word, lang),
+            meta.minWordLength
         );
 
         if (ticket !== this.validationNonce) return;

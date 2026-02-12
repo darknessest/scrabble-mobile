@@ -76,15 +76,20 @@ export class TimerController {
             return;
         }
 
-        if (!meta.turnDeadline && isPreGameLocked()) {
-            meta.turnDeadline = null;
+        // If a deadline already exists, just ensure the ticker is running.
+        // Don't overwrite — the deadline was set when the turn started.
+        if (meta.turnDeadline) {
+            this.startTimerTicker();
+            return;
+        }
+
+        if (isPreGameLocked()) {
             this.stopTimerTicker();
             this.renderTimer();
             return;
         }
 
-        if (!meta.turnDeadline && !canStartInitialTurnTimer(meta, Boolean(this.connection?.dataChannelReady))) {
-            meta.turnDeadline = null;
+        if (!canStartInitialTurnTimer(meta, Boolean(this.connection?.dataChannelReady))) {
             this.stopTimerTicker();
             this.renderTimer();
             return;

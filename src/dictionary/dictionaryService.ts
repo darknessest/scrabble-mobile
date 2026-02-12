@@ -90,6 +90,10 @@ export function setMinWordLength(length: number) {
   minLength = Math.max(1, Math.floor(length));
 }
 
+export function getMinWordLength(): number {
+  return minLength;
+}
+
 export type DictionaryKey = Language | 'ru-strict';
 
 async function ensureDictionaryByKey(key: DictionaryKey): Promise<DictionaryStatus> {
@@ -301,7 +305,6 @@ export async function downloadDictionary(language: Language): Promise<Dictionary
 export async function hasWord(word: string, language: Language): Promise<boolean> {
   const status = await ensureDictionary(language);
   const norm = normalize(word);
-  if (norm.length < minLength) return false;
 
   if (!status.available) {
     // For Russian, check strict version as fallback

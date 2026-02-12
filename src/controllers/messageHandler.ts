@@ -32,6 +32,11 @@ export function createMessageHandler(
       app.state.meta = newMeta;
       app.state.labels = msg.labels;
 
+      await dictionaryController.ensureLanguage(newMeta.language);
+      if (newMeta.language === 'ru' && newMeta.russianDictionaryVariant === 'strict') {
+        await dictionaryController.downloadRuStrict();
+      }
+
       gameController.resume(msg.state);
       propagateMeta(app.controllers, newMeta, msg.state, msg.labels);
 
