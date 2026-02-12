@@ -1,4 +1,5 @@
 import type { GameState, Language } from '../core/types';
+import { BOARD_SIZE, inBounds, computeAnchors, type Anchor } from '../core/boardUtils';
 import { getDictionaryWordSet, setMinWordLength, type DictionaryKey } from '../dictionary/dictionaryService';
 
 type RussianVariant = 'full' | 'strict' | undefined;
@@ -48,41 +49,6 @@ type EndgameScanResponse =
     error: string;
     debug?: EndgameScanDebug;
   };
-
-const BOARD_SIZE = 15;
-
-function inBounds(v: number) {
-  return v >= 0 && v < BOARD_SIZE;
-}
-
-function boardHasAnyTiles(board: GameState['board']): boolean {
-  return board.some((row) => row.some((cell) => cell.tile !== null));
-}
-
-type Anchor = { x: number; y: number };
-
-function computeAnchors(board: GameState['board']): Anchor[] {
-  if (!boardHasAnyTiles(board)) return [{ x: 7, y: 7 }];
-
-  const anchors: Anchor[] = [];
-  const seen = new Set<string>();
-  for (let y = 0; y < BOARD_SIZE; y += 1) {
-    for (let x = 0; x < BOARD_SIZE; x += 1) {
-      if (board[y][x].tile) continue;
-      const touches =
-        (inBounds(x + 1) && board[y][x + 1].tile) ||
-        (inBounds(x - 1) && board[y][x - 1].tile) ||
-        (inBounds(y + 1) && board[y + 1][x].tile) ||
-        (inBounds(y - 1) && board[y - 1][x].tile);
-      if (!touches) continue;
-      const key = `${x},${y}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      anchors.push({ x, y });
-    }
-  }
-  return anchors;
-}
 
 type Orientation = 'row' | 'col';
 

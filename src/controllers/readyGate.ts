@@ -28,10 +28,6 @@ export class ReadyGate {
         this.labels = labels;
     }
 
-    setOnReadyClick(_callback: () => void): void {
-        // Callback is managed externally
-    }
-
     setMeta(meta: SessionMeta | null): void {
         this.meta = meta;
     }

@@ -131,38 +131,6 @@ export function updateTimerSettingsUI(
     }
 }
 
-export function renderTimer(
-    timerDisplay: HTMLSpanElement,
-    meta: SessionMeta | null,
-    isPreGameLocked: () => boolean,
-    onTimeout: () => void
-): void {
-    if (!timerDisplay) return;
-    if (meta && isPreGameLocked() && (meta.gameStartAt == null || Date.now() < meta.gameStartAt)) {
-        timerDisplay.style.display = 'none';
-        return;
-    }
-    if (!meta || !meta.timerEnabled || !meta.timerDurationSec || !meta.turnDeadline) {
-        timerDisplay.style.display = 'none';
-        return;
-    }
-
-    const remainingMs = meta.turnDeadline - Date.now();
-    const clamped = Math.max(0, remainingMs);
-    const totalSeconds = Math.floor(clamped / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-
-    timerDisplay.style.display = '';
-    timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-    timerDisplay.classList.toggle('danger', clamped === 0);
-    timerDisplay.classList.toggle('active', clamped > 0);
-
-    if (clamped === 0) {
-        void onTimeout();
-    }
-}
-
 export function renderHandshakeVisibility(
     hostCard: HTMLDivElement,
     clientCard: HTMLDivElement,
@@ -270,9 +238,12 @@ export function renderBoard(
 ): void {
     const state = currentState;
     if (!state) {
+        boardEl.removeAttribute('role');
         boardEl.innerHTML = '<p class="hint">Start a session to see the board.</p>';
         return;
     }
+    boardEl.setAttribute('role', 'grid');
+    boardEl.setAttribute('aria-label', 'Game board');
 
     const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
     const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
@@ -313,14 +284,20 @@ export function renderBoard(
             ]
                 .filter(Boolean)
                 .join(' ');
-            const lastMoveA11y = isLastMove && tile ? ' role="img" aria-label="Last placed tile"' : '';
+            const parts: string[] = [];
+            if (tile) parts.push(`${tile.letter} (${tile.value})`);
+            else if (premium) parts.push(PREMIUM_LABELS[premium] ?? '');
+            else parts.push('Empty');
+            if (isNew) parts.push('pending');
+            if (isLastMove) parts.push('last move');
+            const cellLabel = parts.filter(Boolean).join(', ');
             cells.push(
-                `<div class="${classes}" data-x="${x}" data-y="${y}"${lastMoveA11y}>
+                `<div class="${classes}" role="gridcell" aria-label="${cellLabel}" data-x="${x}" data-y="${y}">
           ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
         </div>`
             );
         }
-        rows.push(`<div class="row">${cells.join('')}</div>`);
+        rows.push(`<div class="row" role="row">${cells.join('')}</div>`);
     }
     boardEl.innerHTML = rows.join('');
 
@@ -434,6 +411,14 @@ export function renderTile(tile: Tile, selected = false, pending = false): strin
     <span class="value">${tile.value}</span>
   </button>`;
 }
+
+const PREMIUM_LABELS: Record<string, string> = {
+    tw: 'Triple Word',
+    dw: 'Double Word',
+    tl: 'Triple Letter',
+    dl: 'Double Letter',
+    center: 'Center'
+};
 
 export function premiumClass(x: number, y: number): string {
     if (x === 7 && y === 7) return 'center';

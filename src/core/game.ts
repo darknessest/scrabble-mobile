@@ -1,4 +1,5 @@
 import { buildPremiumMap } from './boardLayout';
+import { BOARD_SIZE, inBounds, boardHasAnyTiles, computeAnchors, type Anchor } from './boardUtils';
 import { buildBag, getInitialBagSize } from './tiles';
 import type {
   BoardCell,
@@ -12,7 +13,7 @@ import type {
   Tile
 } from './types';
 
-export const BOARD_SIZE = 15;
+export { BOARD_SIZE } from './boardUtils';
 const premiumMap = buildPremiumMap();
 
 export type WordChecker = ((word: string, language: Language) => Promise<boolean>) & {
@@ -314,34 +315,6 @@ function checkSequentialSkips(state: GameState): boolean {
   return okA || okB;
 }
 
-type Anchor = { x: number; y: number };
-
-function computeAnchors(board: BoardCell[][]): Anchor[] {
-  // Empty board => only center is a meaningful anchor for first move.
-  if (!boardHasAnyTiles(board)) return [{ x: 7, y: 7 }];
-
-  const anchors: Anchor[] = [];
-  const seen = new Set<string>();
-  for (let y = 0; y < BOARD_SIZE; y += 1) {
-    for (let x = 0; x < BOARD_SIZE; x += 1) {
-      if (board[y][x].tile) continue;
-      const neighbors = [
-        [x + 1, y],
-        [x - 1, y],
-        [x, y + 1],
-        [x, y - 1]
-      ];
-      const touches = neighbors.some(([nx, ny]) => inBounds(nx) && inBounds(ny) && board[ny][nx].tile);
-      if (!touches) continue;
-      const key = `${x},${y}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      anchors.push({ x, y });
-    }
-  }
-  return anchors;
-}
-
 async function hasValidMovesWithWords(
   state: GameState,
   playerId: string,
@@ -480,10 +453,6 @@ function createBoard(): BoardCell[][] {
   );
 }
 
-function boardHasAnyTiles(board: BoardCell[][]): boolean {
-  return board.some((row) => row.some((cell) => cell.tile !== null));
-}
-
 function drawTiles(bag: Tile[], count: number): Tile[] {
   const tiles: Tile[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -524,10 +493,6 @@ function shuffleInPlace<T>(arr: T[]) {
     const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
-}
-
-function inBounds(v: number) {
-  return v >= 0 && v < BOARD_SIZE;
 }
 
 type Orientation = 'row' | 'col';

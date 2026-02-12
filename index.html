@@ -16,7 +16,268 @@
     <title>Offline Scrabble PWA</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="shell">
+        <header class="top">
+          <div class="brand">
+            <p class="eyebrow">Mobile-first &bull; Offline &bull; P2P</p>
+            <h1>Scrabble PWA</h1>
+            <p id="app-version" class="hint version"></p>
+          </div>
+          <div class="stack top-controls">
+            <div class="status-row">
+              <span id="offline-status" class="pill"><span class="status-dot"></span>...</span>
+              <span id="dict-status" class="pill">Dictionaries: checking...</span>
+              <span id="p2p-status" class="pill">P2P: idle</span>
+            </div>
+            <div class="row gap wrap">
+              <button id="force-reload" class="ghost">Update Game</button>
+              <button id="toggle-setup" class="ghost">Hide setup</button>
+            </div>
+          </div>
+        </header>
+
+        <section class="cards setup-section" id="settings-section">
+          <div class="card compact" id="dict-controls">
+            <div class="row wrap gap">
+              <span class="label">Dictionaries</span>
+              <button class="ghost" id="refresh-dicts">Re-check</button>
+              <button id="download-en" class="ghost">
+                EN pack <span id="dict-en-icon" aria-label="English dictionary status">&hellip;</span>
+              </button>
+              <button id="download-ru" class="ghost">
+                RU pack <span id="dict-ru-icon" aria-label="Russian dictionary status">&hellip;</span>
+              </button>
+              <button id="download-ru-strict" class="ghost">
+                RU strict <span id="dict-ru-strict-icon" aria-label="Russian strict dictionary status">&hellip;</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Session</h3>
+              <span class="hint">Solo, Host (offer), or Join (answer)</span>
+            </div>
+            <div class="row wrap gap">
+              <div class="segmented" id="mode-tabs">
+                <button data-mode="solo" class="active">Solo</button>
+                <button data-mode="host">Host</button>
+                <button data-mode="client">Join</button>
+              </div>
+              <label class="stack flex1">
+                <span class="label">Your name</span>
+                <input id="me-name" value="Player 1" />
+              </label>
+              <label class="stack flex1">
+                <span class="label">Partner name</span>
+                <input id="peer-name" value="Player 2" />
+              </label>
+              <label class="stack" id="session-language">
+                <span class="label">Session language</span>
+                <select id="language">
+                  <option value="en">English</option>
+                  <option value="ru">&#x420;&#x443;&#x441;&#x441;&#x43A;&#x438;&#x439;</option>
+                </select>
+              </label>
+              <label class="stack" id="russian-variant" style="display: none;">
+                <span class="label">Russian dictionary</span>
+                <select id="russian-dict-variant">
+                  <option value="full">Full (all forms)</option>
+                  <option value="strict">Strict (nominative+plural only)</option>
+                </select>
+                <p class="hint">Full: all inflected forms. Strict: nouns nominative+plural only, others base forms.</p>
+              </label>
+              <label class="stack">
+                <span class="label">Minimum word length</span>
+                <input id="min-length" type="number" min="1" value="2" />
+                <p class="hint">Words shorter than this are rejected (e.g., set to 2 or 3).</p>
+              </label>
+              <div class="stack" id="session-timer">
+                <div class="row gap wrap">
+                  <label class="row gap" style="align-items: center;">
+                    <input id="turn-timer-enabled" type="checkbox" checked />
+                    <span class="label">Enable turn timer</span>
+                  </label>
+                  <label class="stack" id="turn-timer-minutes" style="max-width: 120px;">
+                    <span class="label">Minutes</span>
+                    <input id="turn-timer" type="number" min="1" max="10" value="5" />
+                  </label>
+                </div>
+                <p class="hint">Host/solo only; shared with peers. When time runs out, the turn auto-passes.</p>
+              </div>
+            </div>
+            <div class="row gap">
+              <button id="start-btn" class="primary">Start</button>
+              <button id="resume-btn" class="ghost" disabled>Resume saved</button>
+              <button id="clear-snapshot" class="ghost danger" disabled>Forget saved</button>
+            </div>
+            <p id="resume-note" class="hint"></p>
+          </div>
+        </section>
+
+        <section class="cards">
+          <div class="card" id="host-handshake">
+            <div class="card-head">
+              <h3>Host Handshake</h3>
+              <span class="hint">Share offer QR &rarr; scan/paste answer (auto-apply)</span>
+            </div>
+            <div class="row wrap gap">
+              <div class="stack flex1">
+                <span class="label">Offer (share with partner)</span>
+                <textarea id="offer-text" rows="3" readonly></textarea>
+                <div class="row gap wrap">
+                  <button id="copy-offer" class="ghost">Copy</button>
+                </div>
+              </div>
+              <div class="stack flex1">
+                <span class="label">Answer from partner</span>
+                <textarea id="answer-text" rows="3" placeholder="Scan/paste answer"></textarea>
+                <div class="row gap wrap">
+                  <button id="scan-answer" class="ghost">Scan QR</button>
+                </div>
+              </div>
+              <div class="qr-stack">
+                <img id="offer-qr" alt="Offer QR" />
+                <span class="hint center">Offer QR</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" id="client-handshake">
+            <div class="card-head">
+              <h3>Join Handshake</h3>
+              <span class="hint">Scan/paste host offer &rarr; answer is generated automatically</span>
+            </div>
+            <div class="row wrap gap">
+              <div class="stack flex1">
+                <span class="label">Host offer</span>
+                <textarea id="host-offer-input" rows="3" placeholder="Scan/paste host offer"></textarea>
+                <div class="row gap wrap">
+                  <button id="scan-offer" class="ghost">Scan QR</button>
+                </div>
+              </div>
+              <div class="stack flex1">
+                <span class="label">Your answer (share back)</span>
+                <textarea id="client-answer" rows="3" readonly></textarea>
+                <div class="row gap wrap">
+                  <button id="copy-client-answer" class="ghost">Copy</button>
+                </div>
+              </div>
+              <div class="qr-stack">
+                <img id="answer-qr" alt="Answer QR" />
+                <span class="hint center">Answer QR</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="cards">
+          <div class="card board-card board-bleed">
+            <div class="card-head">
+              <h3>Board</h3>
+              <div class="row gap">
+                <span class="label">Turn:</span>
+                <span id="turn-indicator" class="pill"></span>
+                <span id="timer-display" class="pill timer-pill"></span>
+                <span id="word-check-status" class="pill" style="display: none"></span>
+                <span id="word-length-status" class="pill" style="display: none"></span>
+                <span id="endgame-scan-status" class="pill" style="display: none"></span>
+              </div>
+            </div>
+            <div id="toast" class="toast" role="status" aria-live="polite" style="display: none"></div>
+            <div id="gameover-banner" class="gameover-banner" style="display: none;" aria-live="polite">
+              <div class="gameover-banner-inner">
+                <div class="gameover-banner-text">
+                  <strong>Game ended</strong>
+                  <span id="gameover-banner-scores" class="hint"></span>
+                  <span id="rematch-banner-status" class="hint"></span>
+                </div>
+                <div class="row gap wrap">
+                  <button id="rematch-btn-banner" class="primary">Rematch</button>
+                  <button id="show-results-btn" class="ghost">Results</button>
+                </div>
+              </div>
+            </div>
+            <div id="disconnect-overlay" class="disconnect-overlay" style="display: none;">
+              <div class="disconnect-content">
+                <div class="disconnect-icon">&#x26A1;</div>
+                <h3>Connection Lost</h3>
+                <p id="disconnect-message">The connection to your opponent was interrupted.</p>
+                <p class="disconnect-hint">Scan the QR code again to reconnect and resume your game.</p>
+                <div class="disconnect-spinner"></div>
+              </div>
+            </div>
+            <div id="ready-overlay" class="ready-overlay" style="display: none;" aria-hidden="true">
+              <div class="ready-content">
+                <h3>Get ready</h3>
+                <p id="ready-status" class="hint"></p>
+                <button id="ready-btn" class="primary">Ready</button>
+              </div>
+            </div>
+            <div id="gameover-overlay" class="gameover-overlay" style="display: none;" aria-hidden="true">
+              <div class="gameover-content">
+                <div class="gameover-icon">&#x1F3C1;</div>
+                <h3>Game ended</h3>
+                <p id="gameover-reason" class="hint"></p>
+                <div id="gameover-scores" class="gameover-scores"></div>
+                <div id="gameover-stats" class="gameover-stats"></div>
+                <p id="rematch-status" class="hint" style="margin: 0.75rem 0 0;"></p>
+                <div class="row gap wrap" style="justify-content: center; margin-top: 1rem;">
+                  <button id="rematch-btn-overlay" class="primary">Rematch</button>
+                  <button id="view-board-btn" class="ghost">View board</button>
+                </div>
+              </div>
+            </div>
+            <div id="board" class="board"></div>
+          </div>
+
+          <div class="card rack-card">
+            <div class="card-head">
+              <h3>Rack &amp; Actions</h3>
+              <span id="rack-owner" class="hint"></span>
+            </div>
+            <div id="rack" class="rack"></div>
+            <div class="row wrap gap">
+              <button id="confirm-move" class="primary">Confirm move</button>
+              <button id="clear-placements" class="ghost">Clear placements</button>
+              <button id="mix-rack" class="ghost" title="Shuffle your rack tiles">Mix</button>
+              <button id="pass-btn" class="ghost">Pass</button>
+              <button id="exchange-btn" class="ghost">Replace &amp; pass</button>
+            </div>
+          </div>
+
+          <div class="card info-card">
+            <div class="card-head">
+              <h3>Scores &amp; Status</h3>
+              <div class="row gap wrap">
+                <button id="toggle-logs" class="ghost">Hide logs</button>
+                <button id="request-sync" class="ghost">Request sync</button>
+              </div>
+            </div>
+            <div id="scores"></div>
+            <div id="log" class="log"></div>
+          </div>
+        </section>
+
+        <section class="cards" id="stats-section">
+          <div class="card">
+            <div class="card-head">
+              <h3>Game stats</h3>
+              <span class="hint">Optional</span>
+            </div>
+            <details id="stats-details" class="stats-details">
+              <summary>Show</summary>
+              <div class="stats-row">
+                <span class="label">Letters left in bag</span>
+                <strong id="bag-count" class="bag-count"></strong>
+              </div>
+              <div id="move-history" class="move-history"></div>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

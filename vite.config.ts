@@ -228,7 +228,7 @@ export default defineConfig(({ command }) => {
       include: ['src/**/*.test.ts'],
       coverage: {
         provider: 'v8',
-        include: ['src/core/**', 'src/dictionary/**']
+        include: ['src/core/**', 'src/dictionary/**', 'src/controllers/**', 'src/utils/**']
       }
     }
   };

@@ -14,6 +14,7 @@ export class GameController {
     private rackOrder: string[] = [];
     private rackOrderSessionId: string | null = null;
     private validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
+    private validationMessage: string | null = null;
     private validationNonce = 0;
     private lastAutoPassToken: string | null = null;
     private autoPassInProgress = false;
@@ -67,6 +68,10 @@ export class GameController {
 
     getValidationStatus(): 'idle' | 'checking' | 'valid' | 'invalid' {
         return this.validationStatus;
+    }
+
+    getValidationMessage(): string | null {
+        return this.validationMessage;
     }
 
     setOnValidationUpdate(callback: () => void): void {
@@ -373,11 +378,13 @@ export class GameController {
         const meta = this.meta;
         if (!state || !meta || this.placements.length === 0) {
             this.validationStatus = 'idle';
+            this.validationMessage = null;
             this.onRenderAll();
             return;
         }
 
         this.validationStatus = 'checking';
+        this.validationMessage = null;
         this.onRenderAll();
 
         const preview = new ScrabbleGame();
@@ -391,6 +398,7 @@ export class GameController {
         if (ticket !== this.validationNonce) return;
 
         this.validationStatus = result.success ? 'valid' : 'invalid';
+        this.validationMessage = result.success ? null : (result.message ?? null);
         this.onRenderAll();
     }
 
