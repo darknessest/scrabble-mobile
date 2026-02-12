@@ -11,6 +11,7 @@ export class ReadyGate {
     private readyBtn: HTMLButtonElement;
     private readyTicker: number | null = null;
     private labels: Record<string, string> = {};
+    private onUnlock: (() => void) | null = null;
     private READY_GRACE_MS = 3000;
     private READY_TICK_MS = 200;
 
@@ -22,6 +23,10 @@ export class ReadyGate {
         this.readyOverlay = readyOverlay;
         this.readyStatusEl = readyStatusEl;
         this.readyBtn = readyBtn;
+    }
+
+    setOnUnlock(cb: () => void): void {
+        this.onUnlock = cb;
     }
 
     setLabels(labels: Record<string, string>): void {
@@ -61,7 +66,10 @@ export class ReadyGate {
         if (this.readyTicker) return;
         this.readyTicker = window.setInterval(() => {
             this.renderReadyOverlay();
-            if (!this.isPreGameLocked()) this.stopReadyTicker();
+            if (!this.isPreGameLocked()) {
+                this.stopReadyTicker();
+                this.onUnlock?.();
+            }
         }, this.READY_TICK_MS);
     }
 

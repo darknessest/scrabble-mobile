@@ -141,6 +141,10 @@ export function wireCallbacks(c: Controllers, deps: WireCallbacksDeps): void {
     deps.renderAll();
   });
 
+  readyGate.setOnUnlock(() => {
+    deps.renderAll();
+  });
+
   timerController.setOnTimeout(() => {
     void gameController.maybeAutoPassOnTimeout();
   });
