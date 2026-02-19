@@ -218,7 +218,6 @@ export function setupEvents(app: App, session: SessionManager): void {
   });
   uiElements.minLengthInput.addEventListener('change', () => {
     const val = Number(uiElements.minLengthInput.value) || 2;
-    dictionaryController.setMinWordLength(val);
     app.appendLog(`Min word length set to ${val}`);
     if (state.meta && state.meta.isHost) {
       state.meta.minWordLength = val;
@@ -257,6 +256,26 @@ export function setupEvents(app: App, session: SessionManager): void {
       void storageController.persistSnapshot(gameController.getState(), meta, state.labels);
       app.sendSync();
     }
+  });
+
+  uiElements.boardEl.addEventListener('keydown', (ev: KeyboardEvent) => {
+    const cell = (ev.target as HTMLElement).closest<HTMLElement>('[data-x][data-y]');
+    if (!cell) return;
+    const x = Number(cell.dataset.x);
+    const y = Number(cell.dataset.y);
+    const BOARD_LAST = 14;
+    let nx = x, ny = y;
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); nx = Math.max(0, x - 1); }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); nx = Math.min(BOARD_LAST, x + 1); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); ny = Math.max(0, y - 1); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); ny = Math.min(BOARD_LAST, y + 1); }
+    else if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      cell.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return;
+    } else return;
+    const target = uiElements.boardEl.querySelector<HTMLElement>(`[data-x="${nx}"][data-y="${ny}"]`);
+    target?.focus();
   });
 
   uiElements.boardEl.addEventListener('click', (ev: MouseEvent) => {

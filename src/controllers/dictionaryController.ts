@@ -4,8 +4,7 @@ import {
     downloadDictionaryStrict,
     ensureDictionary,
     ensureDictionaryStrict,
-    getDictionaryWordSet,
-    setMinWordLength
+    getDictionaryWordSet
 } from '../dictionary/dictionaryService';
 
 export class DictionaryController {
@@ -81,10 +80,6 @@ export class DictionaryController {
             this.appendLog(`Failed to download RU strict dictionary`);
         }
         await this.refreshDictStatus();
-    }
-
-    setMinWordLength(val: number): void {
-        setMinWordLength(val);
     }
 
     async hasWordWithVariant(

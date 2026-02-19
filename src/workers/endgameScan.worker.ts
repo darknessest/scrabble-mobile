@@ -1,6 +1,6 @@
 import type { GameState, Language } from '../core/types';
 import { BOARD_SIZE, inBounds, computeAnchors, type Anchor } from '../core/boardUtils';
-import { getDictionaryWordSet, setMinWordLength, type DictionaryKey } from '../dictionary/dictionaryService';
+import { getDictionaryWordSet, type DictionaryKey } from '../dictionary/dictionaryService';
 
 type RussianVariant = 'full' | 'strict' | undefined;
 
@@ -492,8 +492,6 @@ const trieCache: Partial<Record<string, TrieCacheEntry>> = {};
 async function runScan(req: EndgameScanRequest): Promise<EndgameScanResponse> {
   const tTotal0 = performance.now();
   try {
-    setMinWordLength(req.minLength);
-
     const dictKey: DictionaryKey =
       req.language === 'ru' && req.russianVariant === 'strict' ? 'ru-strict' : req.language;
 

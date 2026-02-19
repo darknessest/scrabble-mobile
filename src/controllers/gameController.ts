@@ -1,5 +1,5 @@
 import type { SessionMeta } from '../types';
-import type { GameState, Language, Placement, Tile } from '../core/types';
+import type { GameState, Language, MoveResult, Placement, Tile } from '../core/types';
 import { ScrabbleGame, type WordChecker } from '../core/game';
 import { reconcileOrder, shuffleCopy } from '../ui/rackOrder';
 import { hasWord } from '../dictionary/dictionaryService';
@@ -235,31 +235,45 @@ export class GameController {
             this.onRenderAll();
             void this.onPersist();
             this.onSync();
-            if (result.gameEnded) {
-                meta.gameOver = {
-                    reason: result.gameEnded.reason,
-                    at: Date.now(),
-                    moveNumber: this.currentState.moveNumber,
-                    finalScores: result.gameEnded.finalScores
-                };
-                void this.onPersist();
-                this.onSync();
-                this.onGameEnd();
-            } else {
-                this.onGameEnd();
-            }
+            this.handlePostMoveResult(result, meta);
             return true;
         }
         return false;
     }
 
-    async submitPass(): Promise<boolean> {
+    async submitRemoteMove(placements: Placement[], playerId: string, buildWordChecker: () => WordChecker): Promise<boolean> {
+        const state = this.currentState;
+        const meta = this.meta;
+        if (!state || !meta) return false;
+
+        const result = await this.game.placeMove(
+            playerId,
+            placements,
+            buildWordChecker(),
+            meta.minWordLength
+        );
+        if (!result.success) {
+            this.appendLog(result.message ?? 'Invalid move');
+            return false;
+        }
+        this.currentState = this.game.getState();
+        if (meta.timerEnabled) meta.turnDeadline = null;
+        this.updateValidation();
+        this.onRenderAll();
+        void this.onPersist();
+        this.onSync();
+        this.handlePostMoveResult(result, meta);
+        return true;
+    }
+
+    submitPass(actingPlayerId?: string): boolean {
         const state = this.currentState;
         const meta = this.meta;
         if (!state || !meta) return false;
 
         if (meta.isHost || meta.mode === 'solo') {
-            const result = this.game.passTurn(meta.localPlayerId);
+            const pid = actingPlayerId ?? meta.localPlayerId;
+            const result = this.game.passTurn(pid);
             if (!result.success) {
                 this.appendLog(result.message ?? 'Cannot pass');
                 return false;
@@ -269,31 +283,20 @@ export class GameController {
             this.onRenderAll();
             void this.onPersist();
             this.onSync();
-            if (result.gameEnded) {
-                meta.gameOver = {
-                    reason: result.gameEnded.reason,
-                    at: Date.now(),
-                    moveNumber: this.currentState.moveNumber,
-                    finalScores: result.gameEnded.finalScores
-                };
-                void this.onPersist();
-                this.onSync();
-                this.onGameEnd();
-            } else {
-                this.onGameEnd();
-            }
+            this.handlePostMoveResult(result, meta);
             return true;
         }
         return false;
     }
 
-    async submitExchange(tileIds: string[]): Promise<boolean> {
+    submitExchange(tileIds: string[], actingPlayerId?: string): boolean {
         const state = this.currentState;
         const meta = this.meta;
         if (!state || !meta) return false;
 
         if (meta.isHost || meta.mode === 'solo') {
-            const result = this.game.exchangeTiles(meta.localPlayerId, tileIds);
+            const pid = actingPlayerId ?? meta.localPlayerId;
+            const result = this.game.exchangeTiles(pid, tileIds);
             if (!result.success) {
                 this.appendLog(result.message ?? 'Exchange rejected');
                 return false;
@@ -349,29 +352,31 @@ export class GameController {
             void this.onPersist();
             this.onSync();
             this.onRenderAll();
-            if (result.gameEnded) {
-                meta.gameOver = {
-                    reason: result.gameEnded.reason,
-                    at: Date.now(),
-                    moveNumber: this.currentState.moveNumber,
-                    finalScores: result.gameEnded.finalScores
-                };
-                void this.onPersist();
-                this.onSync();
-                this.onGameEnd();
-            } else {
-                this.onGameEnd();
-            }
+            this.handlePostMoveResult(result, meta);
         } finally {
             this.autoPassInProgress = false;
         }
     }
 
+    private handlePostMoveResult(result: MoveResult, meta: SessionMeta): void {
+        if (result.gameEnded) {
+            meta.gameOver = {
+                reason: result.gameEnded.reason,
+                at: Date.now(),
+                moveNumber: this.currentState!.moveNumber,
+                finalScores: result.gameEnded.finalScores
+            };
+            void this.onPersist();
+            this.onSync();
+        }
+        this.onGameEnd();
+    }
+
     buildWordChecker(): WordChecker {
         const meta = this.meta;
-        void meta?.russianDictionaryVariant; // Used for dictionary variant selection
+        const variant = meta?.russianDictionaryVariant;
         const fn = ((word: string, language: Language) => {
-            return hasWord(word, language);
+            return hasWord(word, language, variant);
         }) as WordChecker;
         return fn;
     }
@@ -397,10 +402,11 @@ export class GameController {
 
         const preview = new ScrabbleGame();
         preview.resume(structuredClone(state));
+        const variant = meta.russianDictionaryVariant;
         const result = await preview.placeMove(
             meta.localPlayerId,
             this.placements,
-            (word, lang) => hasWord(word, lang),
+            (word, lang) => hasWord(word, lang, variant),
             meta.minWordLength
         );
 

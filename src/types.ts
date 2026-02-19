@@ -1,4 +1,4 @@
-import type { GameEndReason, Language } from './core/types';
+import type { GameEndReason, GameState, Language, Placement } from './core/types';
 
 export type Mode = 'solo' | 'host' | 'client';
 
@@ -33,7 +33,7 @@ export interface SessionMeta {
 }
 
 export interface SnapshotPayload {
-    state: import('./core/types').GameState;
+    state: GameState;
     meta: SessionMeta;
     labels: Record<string, string>;
 }
@@ -55,11 +55,11 @@ export interface GameOverEvent {
 }
 
 export type ActionMessage =
-    | { type: 'ACTION_MOVE'; placements: import('./core/types').Placement[]; playerId: string }
+    | { type: 'ACTION_MOVE'; placements: Placement[]; playerId: string }
     | { type: 'ACTION_PASS'; playerId: string }
     | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
     | { type: 'ACTION_REMATCH_REQUEST'; playerId: string; at: number }
-    | { type: 'DRAFT_PLACEMENTS'; placements: import('./core/types').Placement[]; playerId: string; moveNumber: number }
+    | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
     | { type: 'PLAYER_READY'; playerId: string; ready: boolean }
     | { type: 'REQUEST_SYNC' }
-    | { type: 'SYNC_STATE'; state: import('./core/types').GameState; meta: SessionMeta; labels: Record<string, string> };
+    | { type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> };

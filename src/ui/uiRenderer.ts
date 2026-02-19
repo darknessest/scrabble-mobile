@@ -1,16 +1,9 @@
 import type { GameState, Language, Placement, Tile } from '../core/types';
 import type { SessionMeta } from '../types';
 import { BOARD_SIZE } from '../core/game';
-import { applyActionButtonsStateToDom } from './actionButtonsState';
+import { buildPremiumMap } from '../core/boardLayout';
+import { escapeHtml } from '../utils/escapeHtml';
 
-// Helper function to get labels - will be passed from main
-let labels: Record<string, string> = {};
-export function setLabels(newLabels: Record<string, string>) {
-    labels = newLabels;
-}
-export function getLabels() {
-    return labels;
-}
 
 export interface UiElements {
     boardEl: HTMLDivElement;
@@ -102,13 +95,10 @@ export function applyTimerInputFromMeta(
 
 export function applyMinLengthInputFromMeta(
     meta: SessionMeta | null,
-    minLengthInput: HTMLInputElement,
-    setMinWordLength: (val: number) => void
+    minLengthInput: HTMLInputElement
 ): void {
     if (!meta?.minWordLength) return;
-    const val = Math.max(1, Math.floor(meta.minWordLength));
-    minLengthInput.value = String(val);
-    setMinWordLength(val);
+    minLengthInput.value = String(Math.max(1, Math.floor(meta.minWordLength)));
 }
 
 export function resolveTimerDurationSeconds(timerInput: HTMLInputElement): number {
@@ -292,8 +282,8 @@ export function renderBoard(
             if (isLastMove) parts.push('last move');
             const cellLabel = parts.filter(Boolean).join(', ');
             cells.push(
-                `<div class="${classes}" role="gridcell" aria-label="${cellLabel}" data-x="${x}" data-y="${y}">
-          ${tile ? `<span class="letter">${tile.letter}</span><span class="value">${tile.value}</span>` : ''}
+                `<div class="${classes}" role="gridcell" tabindex="0" aria-label="${cellLabel}" data-x="${x}" data-y="${y}">
+          ${tile ? `<span class="letter" aria-hidden="true">${escapeHtml(tile.letter)}</span><span class="value" aria-hidden="true">${escapeHtml(String(tile.value))}</span>` : ''}
         </div>`
             );
         }
@@ -313,7 +303,8 @@ export function renderRack(
     placements: Placement[],
     selectedTileId: string | null,
     rackOrder: string[],
-    syncLocalRackOrderFn: (state: GameState, session: SessionMeta) => void
+    syncLocalRackOrderFn: (state: GameState, session: SessionMeta) => void,
+    labels: Record<string, string>
 ): void {
     const state = currentState;
     if (!state || !meta) {
@@ -352,7 +343,7 @@ export function renderScores(
     const parts = Object.entries(state.scores).map(
         ([id, score]) =>
             `<div class="score">
-        <span>${labels[id] ?? id}</span>
+        <span>${escapeHtml(labels[id] ?? id)}</span>
         <strong>${score}</strong>
       </div>`
     );
@@ -381,7 +372,7 @@ export function renderStats(
 
     const formatEntry = (entry: (typeof state.history)[number]) => {
         if (entry.type === 'MOVE') {
-            const words = entry.words.join(', ');
+            const words = entry.words.map((w) => escapeHtml(w)).join(', ');
             return `#${entry.moveNumber} — ${words} (+${entry.scoreDelta})`;
         }
         if (entry.type === 'PASS') return `#${entry.moveNumber} — Pass`;
@@ -389,7 +380,7 @@ export function renderStats(
     };
 
     const blocks = byPlayer.map(({ id, entries }) => {
-        const name = labels[id] ?? id;
+        const name = escapeHtml(labels[id] ?? id);
         const items = entries.length
             ? `<ol class="history-list">${entries
                 .map((e) => `<li>${formatEntry(e)}</li>`)
@@ -405,10 +396,13 @@ export function renderTile(tile: Tile, selected = false, pending = false): strin
     const classes = ['tile'];
     if (selected) classes.push('selected');
     if (pending) classes.push('pending');
-    if (tile.blank && tile.letter === ' ') classes.push('blank');
-    return `<button class="${classes.join(' ')}" data-tile="${tile.id}">
-    <span class="letter">${tile.blank && tile.letter === ' ' ? '?' : tile.letter}</span>
-    <span class="value">${tile.value}</span>
+    const isUnassignedBlank = tile.blank && tile.letter === ' ';
+    if (isUnassignedBlank) classes.push('blank');
+    const letterDisplay = isUnassignedBlank ? '?' : escapeHtml(tile.letter);
+    const ariaLabel = `${isUnassignedBlank ? 'Blank' : tile.letter}, value ${tile.value}`;
+    return `<button class="${classes.join(' ')}" data-tile="${tile.id}" aria-label="${ariaLabel}">
+    <span class="letter" aria-hidden="true">${letterDisplay}</span>
+    <span class="value" aria-hidden="true">${escapeHtml(String(tile.value))}</span>
   </button>`;
 }
 
@@ -420,78 +414,10 @@ const PREMIUM_LABELS: Record<string, string> = {
     center: 'Center'
 };
 
+const premiumMap = buildPremiumMap();
+
 export function premiumClass(x: number, y: number): string {
-    if (x === 7 && y === 7) return 'center';
-    const tripleWord = [0, 7, 14];
-    if (tripleWord.includes(x) && tripleWord.includes(y)) return 'tw';
-    if ((x === y || x + y === 14) && x !== 0 && x !== 7 && x !== 14) return 'dw';
-    const tl = [
-        [1, 5],
-        [1, 9],
-        [5, 1],
-        [5, 5],
-        [5, 9],
-        [5, 13],
-        [9, 1],
-        [9, 5],
-        [9, 9],
-        [9, 13],
-        [13, 5],
-        [13, 9]
-    ];
-    const dl = [
-        [0, 3],
-        [0, 11],
-        [2, 6],
-        [2, 8],
-        [3, 0],
-        [3, 7],
-        [3, 14],
-        [6, 2],
-        [6, 6],
-        [6, 8],
-        [6, 12],
-        [7, 3],
-        [7, 11],
-        [8, 2],
-        [8, 6],
-        [8, 8],
-        [8, 12],
-        [11, 0],
-        [11, 7],
-        [11, 14],
-        [12, 6],
-        [12, 8],
-        [14, 3],
-        [14, 11]
-    ];
-    if (tl.some(([cx, cy]) => cx === x && cy === y)) return 'tl';
-    if (dl.some(([cx, cy]) => cx === x && cy === y)) return 'dl';
-    return '';
+    return (premiumMap.get(`${x},${y}`) ?? '').toLowerCase();
 }
 
-export function applyActionButtonsState(
-    confirmMoveBtn: HTMLButtonElement,
-    passBtn: HTMLButtonElement,
-    exchangeBtn: HTMLButtonElement,
-    clearPlacementsBtn: HTMLButtonElement,
-    mixRackBtn: HTMLButtonElement,
-    currentState: GameState | null,
-    meta: SessionMeta | null,
-    isPreGameLocked: () => boolean,
-    placementsCount: number
-): void {
-    const state = currentState;
-    const isOver = Boolean(meta?.gameOver);
-    const locked = isPreGameLocked();
-    applyActionButtonsStateToDom(
-        { confirmMoveBtn, passBtn, exchangeBtn, clearPlacementsBtn, mixRackBtn },
-        {
-            state,
-            localPlayerId: meta?.localPlayerId ?? null,
-            locked,
-            isOver,
-            placementsCount
-        }
-    );
-}
+

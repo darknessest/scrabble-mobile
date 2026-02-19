@@ -23,6 +23,27 @@ export interface WordInfo {
 const memoryCache: Partial<Record<string, Set<string>>> = {};
 const entryCache: Partial<Record<string, Map<string, DictionaryEntry>>> = {};
 
+function processDictionaryEntries(key: DictionaryKey, entries: DictionaryEntry[]): number {
+  const wordSet = new Set<string>();
+  const entryMap = new Map<string, DictionaryEntry>();
+
+  for (const entry of entries) {
+    const word = normalize(entry.word);
+    wordSet.add(word);
+    entryMap.set(word, entry);
+
+    if (entry.plural) wordSet.add(normalize(entry.plural));
+    if (entry.base) wordSet.add(normalize(entry.base));
+    if (entry.forms) {
+      entry.forms.forEach(form => wordSet.add(normalize(form)));
+    }
+  }
+
+  memoryCache[key] = wordSet;
+  entryCache[key] = entryMap;
+  return wordSet.size;
+}
+
 const BASE = import.meta.env.BASE_URL ?? '/';
 
 // GitHub repository for dictionary assets
@@ -73,10 +94,6 @@ const REMOTE_MAP: Record<Language, string> = {
   ru: 'https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ru/ru_50k.txt'
 };
 
-// Minimal word length (inclusive); users can adjust via UI.
-const DEFAULT_MIN_LENGTH = 2;
-let minLength = DEFAULT_MIN_LENGTH;
-
 function normalizeBaseUrl(value?: string) {
   if (!value) return undefined;
   return value.endsWith('/') ? value.slice(0, -1) : value;
@@ -84,14 +101,6 @@ function normalizeBaseUrl(value?: string) {
 
 function normalize(word: string) {
   return word.trim().toUpperCase();
-}
-
-export function setMinWordLength(length: number) {
-  minLength = Math.max(1, Math.floor(length));
-}
-
-export function getMinWordLength(): number {
-  return minLength;
 }
 
 export type DictionaryKey = Language | 'ru-strict';
@@ -109,30 +118,7 @@ export async function ensureDictionary(language: Language): Promise<DictionarySt
   const stored = await loadDictionary(language);
   if (stored) {
     if (Array.isArray(stored)) {
-      // New structured format
-      const entries = stored as DictionaryEntry[];
-      const wordSet = new Set<string>();
-      const entryMap = new Map<string, DictionaryEntry>();
-
-      for (const entry of entries) {
-        const word = normalize(entry.word);
-        wordSet.add(word);
-        entryMap.set(word, entry);
-
-        // Also add plural and base forms to the word set for lookup
-        if (entry.plural) {
-          wordSet.add(normalize(entry.plural));
-        }
-        if (entry.base) {
-          wordSet.add(normalize(entry.base));
-        }
-        if (entry.forms) {
-          entry.forms.forEach(form => wordSet.add(normalize(form)));
-        }
-      }
-
-      memoryCache[language] = wordSet;
-      entryCache[language] = entryMap;
+      processDictionaryEntries(language, stored as DictionaryEntry[]);
     } else {
       // Legacy string format
       memoryCache[language] = toSet(stored as string);
@@ -210,24 +196,7 @@ export async function downloadDictionaryStrict(): Promise<DictionaryStatus> {
 
   // Process and cache
   if (Array.isArray(data)) {
-    const entries = data as DictionaryEntry[];
-    const wordSet = new Set<string>();
-    const entryMap = new Map<string, DictionaryEntry>();
-
-    for (const entry of entries) {
-      const word = normalize(entry.word);
-      wordSet.add(word);
-      entryMap.set(word, entry);
-
-      if (entry.plural) wordSet.add(normalize(entry.plural));
-      if (entry.base) wordSet.add(normalize(entry.base));
-      if (entry.forms) {
-        entry.forms.forEach(form => wordSet.add(normalize(form)));
-      }
-    }
-
-    memoryCache['ru-strict'] = wordSet;
-    entryCache['ru-strict'] = entryMap;
+    processDictionaryEntries('ru-strict', data as DictionaryEntry[]);
   }
 
   await saveDictionary('ru-strict', data);
@@ -274,25 +243,7 @@ export async function downloadDictionary(language: Language): Promise<Dictionary
 
   // Process and cache
   if (Array.isArray(data)) {
-    // New structured format
-    const entries = data as DictionaryEntry[];
-    const wordSet = new Set<string>();
-    const entryMap = new Map<string, DictionaryEntry>();
-
-    for (const entry of entries) {
-      const word = normalize(entry.word);
-      wordSet.add(word);
-      entryMap.set(word, entry);
-
-      if (entry.plural) wordSet.add(normalize(entry.plural));
-      if (entry.base) wordSet.add(normalize(entry.base));
-      if (entry.forms) {
-        entry.forms.forEach(form => wordSet.add(normalize(form)));
-      }
-    }
-
-    memoryCache[language] = wordSet;
-    entryCache[language] = entryMap;
+    processDictionaryEntries(language, data as DictionaryEntry[]);
   } else {
     // Legacy format
     memoryCache[language] = toSet(data as string);
@@ -302,9 +253,17 @@ export async function downloadDictionary(language: Language): Promise<Dictionary
   return { language, available: true, source: 'fetched', words: memoryCache[language]!.size };
 }
 
-export async function hasWord(word: string, language: Language): Promise<boolean> {
-  const status = await ensureDictionary(language);
+export async function hasWord(word: string, language: Language, variant?: 'full' | 'strict'): Promise<boolean> {
   const norm = normalize(word);
+
+  // Russian strict: only check strict dictionary
+  if (language === 'ru' && variant === 'strict') {
+    const strictStatus = await ensureDictionaryStrict();
+    if (!strictStatus.available) return false;
+    return memoryCache['ru-strict']?.has(norm) ?? false;
+  }
+
+  const status = await ensureDictionary(language);
 
   if (!status.available) {
     // For Russian, check strict version as fallback
@@ -392,24 +351,7 @@ export async function ensureDictionaryStrict(): Promise<DictionaryStatus> {
   const stored = await loadDictionary('ru-strict');
   if (stored) {
     if (Array.isArray(stored)) {
-      const entries = stored as DictionaryEntry[];
-      const wordSet = new Set<string>();
-      const entryMap = new Map<string, DictionaryEntry>();
-
-      for (const entry of entries) {
-        const word = normalize(entry.word);
-        wordSet.add(word);
-        entryMap.set(word, entry);
-
-        if (entry.plural) wordSet.add(normalize(entry.plural));
-        if (entry.base) wordSet.add(normalize(entry.base));
-        if (entry.forms) {
-          entry.forms.forEach(form => wordSet.add(normalize(form)));
-        }
-      }
-
-      memoryCache['ru-strict'] = wordSet;
-      entryCache['ru-strict'] = entryMap;
+      processDictionaryEntries('ru-strict', stored as DictionaryEntry[]);
     } else {
       memoryCache['ru-strict'] = toSet(stored as string);
     }

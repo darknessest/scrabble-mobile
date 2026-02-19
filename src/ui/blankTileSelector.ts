@@ -27,6 +27,9 @@ export class BlankTileSelector {
       `;
 
       const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+      dialog.setAttribute('aria-labelledby', 'blank-dialog-title');
       dialog.style.cssText = `
         background: #1e293b;
         border: 1px solid rgba(148, 163, 184, 0.2);
@@ -38,11 +41,11 @@ export class BlankTileSelector {
       `;
 
       dialog.innerHTML = `
-        <h3 style="margin: 0 0 12px 0; color: #f1f5f9; font-size: 1.25rem; font-weight: 600;">Choose blank tile letter</h3>
+        <h3 id="blank-dialog-title" style="margin: 0 0 12px 0; color: #f1f5f9; font-size: 1.25rem; font-weight: 600;">Choose blank tile letter</h3>
         <p style="margin: 0 0 20px 0; color: #94a3b8; font-size: 0.9rem;">Select which letter this blank tile will represent:</p>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 8px; margin-bottom: 20px;">
           ${letters.split('').map(letter => `
-            <button class="blank-letter-btn" data-letter="${letter}" style="
+            <button class="blank-letter-btn" data-letter="${letter}" aria-label="${letter}" style="
               padding: 10px 8px;
               border: 1px solid rgba(148, 163, 184, 0.2);
               border-radius: 8px;
@@ -77,12 +80,33 @@ export class BlankTileSelector {
       modal.appendChild(dialog);
       document.body.appendChild(modal);
 
-      const handleEscape = (ev: KeyboardEvent) => {
-        if (ev.key === 'Escape') {
-          document.body.removeChild(modal);
-          document.removeEventListener('keydown', handleEscape);
-          resolve(null);
+      // Move focus into dialog
+      const firstBtn = dialog.querySelector<HTMLButtonElement>('button');
+      firstBtn?.focus();
+
+      // Focus trap: keep Tab cycling within the dialog
+      const handleFocusTrap = (ev: KeyboardEvent) => {
+        if (ev.key !== 'Tab') return;
+        const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled])'));
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (ev.shiftKey) {
+          if (document.activeElement === first) { ev.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { ev.preventDefault(); first.focus(); }
         }
+      };
+      document.addEventListener('keydown', handleFocusTrap);
+
+      const cleanup = () => {
+        document.body.removeChild(modal);
+        document.removeEventListener('keydown', handleEscape);
+        document.removeEventListener('keydown', handleFocusTrap);
+      };
+
+      const handleEscape = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape') { cleanup(); resolve(null); }
       };
       document.addEventListener('keydown', handleEscape);
 
@@ -90,17 +114,11 @@ export class BlankTileSelector {
         const target = ev.target as HTMLElement;
         if (target.classList.contains('blank-letter-btn')) {
           const letter = target.dataset.letter!;
-          const updatedTile: Tile = {
-            ...tile,
-            letter: letter,
-            value: 0
-          };
-          document.body.removeChild(modal);
-          document.removeEventListener('keydown', handleEscape);
+          const updatedTile: Tile = { ...tile, letter, value: 0 };
+          cleanup();
           resolve(updatedTile);
         } else if (target.id === 'cancel-blank') {
-          document.body.removeChild(modal);
-          document.removeEventListener('keydown', handleEscape);
+          cleanup();
           resolve(null);
         }
       });

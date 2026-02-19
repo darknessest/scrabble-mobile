@@ -109,23 +109,12 @@ describe('min-length filtering', () => {
     await mod.ensureDictionary('en');
   });
 
-  it('hasWord no longer filters by minLength (moved to game engine)', async () => {
-    mod.setMinWordLength(3);
-    // HI is in the dictionary — hasWord now always returns true for dictionary words
-    // regardless of minLength (min-length check is in computeScore for primary word only)
+  it('hasWord returns true for short dictionary words (min-length check in game engine)', async () => {
     expect(await mod.hasWord('HI', 'en')).toBe(true);
   });
 
-  it('accepts words at or above minLength', async () => {
-    mod.setMinWordLength(3);
+  it('accepts words in dictionary regardless of length', async () => {
     expect(await mod.hasWord('CAT', 'en')).toBe(true);
-  });
-
-  it('getMinWordLength returns current value', () => {
-    mod.setMinWordLength(2);
-    expect(mod.getMinWordLength()).toBe(2);
-    mod.setMinWordLength(4);
-    expect(mod.getMinWordLength()).toBe(4);
   });
 });
 

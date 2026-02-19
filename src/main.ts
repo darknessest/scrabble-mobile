@@ -7,7 +7,6 @@ import { createSessionManager } from './controllers/sessionManager';
 import { createMessageHandler } from './controllers/messageHandler';
 import { setupEvents } from './ui/eventSetup';
 import {
-  setLabels,
   renderBoard,
   renderRack,
   renderScores,
@@ -106,15 +105,17 @@ function applyActionButtonsState(): void {
   uiElements.mixRackBtn.disabled = !gameState || isOver || locked;
 }
 
-function renderAll(): void {
+let renderScheduled = false;
+
+function doRender(): void {
+  renderScheduled = false;
   const gameState = gameController.getState();
   const placements = gameController.getPlacements();
   const selectedTileId = gameController.getSelectedTileId();
   const remoteDraft = gameController.getRemoteDraft();
   const validationStatus = gameController.getValidationStatus();
-  setLabels(state.labels);
   renderBoard(uiElements.boardEl, uiElements.turnIndicator, gameState, state.meta, placements, validationStatus, remoteDraft, state.labels);
-  renderRack(uiElements.rackEl, uiElements.rackOwnerEl, gameState, state.meta, placements, selectedTileId, gameController.getRackOrder(), gameController.syncLocalRackOrder.bind(gameController));
+  renderRack(uiElements.rackEl, uiElements.rackOwnerEl, gameState, state.meta, placements, selectedTileId, gameController.getRackOrder(), gameController.syncLocalRackOrder.bind(gameController), state.labels);
   renderScores(uiElements.scoresEl, gameState, state.labels);
   renderStats(uiElements.bagCountEl, uiElements.moveHistoryEl, gameState, state.labels);
   timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
@@ -122,6 +123,12 @@ function renderAll(): void {
   gameOverController.renderGameOverUi();
   readyGate.renderReadyOverlay();
   applyActionButtonsState();
+}
+
+function renderAll(): void {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(doRender);
 }
 
 function sendSync(): void {
@@ -230,7 +237,7 @@ function applyTimerInputFromMetaInternal(): void {
 }
 
 function applyMinLengthInputFromMetaInternal(): void {
-  applyMinLengthInputFromMeta(state.meta, uiElements.minLengthInput, dictionaryController.setMinWordLength.bind(dictionaryController));
+  applyMinLengthInputFromMeta(state.meta, uiElements.minLengthInput);
 }
 
 function renderVisibilityInternal(): void {

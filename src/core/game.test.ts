@@ -1,13 +1,17 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ScrabbleGame } from './game';
 import type { Placement } from './types';
 
 // Mock crypto.randomUUID for deterministic testing
 let uuidCounter = 0;
-Object.defineProperty(global, 'crypto', {
-    value: {
+beforeAll(() => {
+    vi.stubGlobal('crypto', {
         randomUUID: () => `test-uuid-${uuidCounter++}`
-    }
+    });
+});
+
+afterAll(() => {
+    vi.unstubAllGlobals();
 });
 
 describe('ScrabbleGame', () => {
@@ -255,6 +259,51 @@ describe('ScrabbleGame', () => {
         const ended = await game.checkGameEnd(checker);
         expect(ended.ended).toBe(true);
         expect(ended.reason).toBe('no_moves_bag_empty');
+    });
+
+    describe('applyEndGameScoring', () => {
+        it('subtracts rack tile values from each player score', () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            // Manually set known scores and racks
+            state.scores['p1'] = 30;
+            state.scores['p2'] = 20;
+            state.racks['p1'] = [{ id: 'a', letter: 'A', value: 1 }, { id: 'b', letter: 'B', value: 3 }];
+            state.racks['p2'] = [{ id: 'c', letter: 'Q', value: 10 }];
+
+            game.applyEndGameScoring();
+
+            expect(state.scores['p1']).toBe(26); // 30 - (1+3)
+            expect(state.scores['p2']).toBe(10); // 20 - 10
+        });
+
+        it('can produce negative scores', () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            state.scores['p1'] = 5;
+            state.racks['p1'] = [
+                { id: 'a', letter: 'Q', value: 10 },
+                { id: 'b', letter: 'Z', value: 10 }
+            ];
+
+            game.applyEndGameScoring();
+
+            expect(state.scores['p1']).toBe(-15); // 5 - 20
+        });
+
+        it('empty rack incurs no penalty', () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.scores['p1'] = 15;
+            state.scores['p2'] = 10;
+            state.racks['p1'] = [];
+            state.racks['p2'] = [{ id: 'a', letter: 'E', value: 1 }];
+
+            game.applyEndGameScoring();
+
+            expect(state.scores['p1']).toBe(15); // no penalty
+            expect(state.scores['p2']).toBe(9);  // 10 - 1
+        });
     });
 });
 

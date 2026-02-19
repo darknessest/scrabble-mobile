@@ -41,7 +41,6 @@ export function createSessionManager(app: App): SessionManager {
     if (remoteId) players.push(remoteId);
 
     const minWordLength = Math.max(1, Math.floor(Number(app.uiElements.minLengthInput.value) || 2));
-    dictionaryController.setMinWordLength(minWordLength);
 
     const timerDurationSec = Math.min(Math.max(Number(app.uiElements.timerInput.value) || 0, 1), 10) * 60;
     const timerEnabled = app.uiElements.timerEnabledToggle.checked && timerDurationSec > 0;
@@ -156,9 +155,6 @@ export function createSessionManager(app: App): SessionManager {
 
     propagateAll();
     endgameScanController.resetState();
-
-    const minWordLength = meta.minWordLength ?? Math.max(1, Math.floor(Number(app.uiElements.minLengthInput.value) || 2));
-    dictionaryController.setMinWordLength(minWordLength);
 
     meta.turnDeadline = null;
     timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
