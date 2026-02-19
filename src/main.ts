@@ -114,6 +114,7 @@ function doRender(): void {
   const selectedTileId = gameController.getSelectedTileId();
   const remoteDraft = gameController.getRemoteDraft();
   const validationStatus = gameController.getValidationStatus();
+  gameController.syncLocalRackOrder();
   renderBoard(uiElements.boardEl, uiElements.turnIndicator, gameState, state.meta, placements, validationStatus, remoteDraft, state.labels);
   renderRack(uiElements.rackEl, uiElements.rackOwnerEl, gameState, state.meta, placements, selectedTileId, gameController.getRackOrder(), gameController.syncLocalRackOrder.bind(gameController), state.labels);
   renderScores(uiElements.scoresEl, gameState, state.labels);
