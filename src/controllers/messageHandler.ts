@@ -149,6 +149,12 @@ export function createMessageHandler(
 
     await dictionaryController.ensureLanguage(meta.language);
 
+    const actorPlayerId = meta.remotePlayerId;
+    if (!actorPlayerId) {
+      app.appendLog('Missing remote player id; ignoring action.');
+      return;
+    }
+
     async function handleActionResult(success: boolean): Promise<void> {
       if (!success) return;
       if (meta!.gameOver) {
@@ -162,17 +168,17 @@ export function createMessageHandler(
       gameController.setRemoteDraft(null);
       const success = await gameController.submitRemoteMove(
         msg.placements,
-        msg.playerId,
+        actorPlayerId,
         gameController.buildWordChecker.bind(gameController)
       );
       await handleActionResult(success);
     } else if (msg.type === 'ACTION_PASS') {
       gameController.setRemoteDraft(null);
-      const success = await gameController.submitPass(msg.playerId);
+      const success = await gameController.submitPass(actorPlayerId);
       await handleActionResult(success);
     } else if (msg.type === 'ACTION_EXCHANGE') {
       gameController.setRemoteDraft(null);
-      const success = await gameController.submitExchange(msg.tileIds, msg.playerId);
+      const success = await gameController.submitExchange(msg.tileIds, actorPlayerId);
       if (success) {
         app.checkAndHandleGameEnd();
       }

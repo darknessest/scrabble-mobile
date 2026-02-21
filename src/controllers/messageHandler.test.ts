@@ -511,7 +511,7 @@ describe('createMessageHandler', () => {
   });
 
   describe('ACTION_MOVE (host)', () => {
-    it('calls submitRemoteMove with placements and playerId', async () => {
+    it('calls submitRemoteMove with placements and remotePlayerId', async () => {
       const placements = [{ x: 7, y: 7, tile: { id: 't1', letter: 'A', value: 1, blank: false } }];
       await handleMessage({
         type: 'ACTION_MOVE',
@@ -523,6 +523,21 @@ describe('createMessageHandler', () => {
       expect(app.controllers.gameController.submitRemoteMove).toHaveBeenCalledWith(
         placements,
         'client',
+        expect.any(Function)
+      );
+    });
+
+    it('ignores spoofed playerId and uses remotePlayerId from meta', async () => {
+      app.state.meta = makeFakeHostMeta({ remotePlayerId: 'real-client' });
+      await handleMessage({
+        type: 'ACTION_MOVE',
+        placements: [],
+        playerId: 'spoofed-host-id'
+      });
+
+      expect(app.controllers.gameController.submitRemoteMove).toHaveBeenCalledWith(
+        [],
+        'real-client',
         expect.any(Function)
       );
     });
@@ -576,7 +591,7 @@ describe('createMessageHandler', () => {
   });
 
   describe('ACTION_PASS (host)', () => {
-    it('calls submitPass with playerId', async () => {
+    it('calls submitPass with remotePlayerId', async () => {
       await handleMessage({
         type: 'ACTION_PASS',
         playerId: 'client'
@@ -584,6 +599,16 @@ describe('createMessageHandler', () => {
 
       expect(app.controllers.gameController.setRemoteDraft).toHaveBeenCalledWith(null);
       expect(app.controllers.gameController.submitPass).toHaveBeenCalledWith('client');
+    });
+
+    it('ignores spoofed playerId and uses remotePlayerId from meta', async () => {
+      app.state.meta = makeFakeHostMeta({ remotePlayerId: 'real-client' });
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'spoofed-host-id'
+      });
+
+      expect(app.controllers.gameController.submitPass).toHaveBeenCalledWith('real-client');
     });
 
     it('calls checkAndHandleGameEnd on success when game is not over', async () => {
@@ -611,7 +636,7 @@ describe('createMessageHandler', () => {
   });
 
   describe('ACTION_EXCHANGE (host)', () => {
-    it('calls submitExchange with tileIds and playerId', async () => {
+    it('calls submitExchange with tileIds and remotePlayerId', async () => {
       const tileIds = ['t1', 't2'];
       await handleMessage({
         type: 'ACTION_EXCHANGE',
@@ -621,6 +646,17 @@ describe('createMessageHandler', () => {
 
       expect(app.controllers.gameController.setRemoteDraft).toHaveBeenCalledWith(null);
       expect(app.controllers.gameController.submitExchange).toHaveBeenCalledWith(tileIds, 'client');
+    });
+
+    it('ignores spoofed playerId and uses remotePlayerId from meta', async () => {
+      app.state.meta = makeFakeHostMeta({ remotePlayerId: 'real-client' });
+      await handleMessage({
+        type: 'ACTION_EXCHANGE',
+        tileIds: ['t1'],
+        playerId: 'spoofed-host-id'
+      });
+
+      expect(app.controllers.gameController.submitExchange).toHaveBeenCalledWith(['t1'], 'real-client');
     });
 
     it('calls checkAndHandleGameEnd on success', async () => {
@@ -633,6 +669,20 @@ describe('createMessageHandler', () => {
       });
 
       expect(app.checkAndHandleGameEnd).toHaveBeenCalled();
+    });
+  });
+
+  describe('host action identity guard', () => {
+    it('ignores action messages when remotePlayerId is missing', async () => {
+      app.state.meta = makeFakeHostMeta({ remotePlayerId: '' });
+
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'client'
+      });
+
+      expect(app.controllers.gameController.submitPass).not.toHaveBeenCalled();
+      expect(app.appendLog).toHaveBeenCalledWith('Missing remote player id; ignoring action.');
     });
   });
 
