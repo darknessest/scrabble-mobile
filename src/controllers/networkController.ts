@@ -1,5 +1,5 @@
 import type { SessionMeta, ActionMessage } from '../types';
-import type { GameState } from '../core/types';
+import type { GameState, Language } from '../core/types';
 import type { P2PCallbacks, P2PConnection } from '../network/p2p';
 import { createClient, createHost } from '../network/p2p';
 import { toQrDataUrl } from '../network/qr';
@@ -29,6 +29,8 @@ export class NetworkController {
     private onErrorCallback: (err: unknown) => void = () => { };
     private onConnectionStateChangeCallback: (state: string) => void = () => { };
     private disconnectTimerState: { deadline: number; remaining: number } | null = null;
+    private hostLanguageSelect: HTMLSelectElement | null = null;
+    private hostEnsureLanguage: ((lang: Language) => Promise<void>) | null = null;
 
     constructor(
         p2pStatus: HTMLSpanElement,
@@ -122,7 +124,7 @@ export class NetworkController {
         };
     }
 
-    async buildHostOffer(languageSelect: HTMLSelectElement, ensureLanguage: (lang: import('../core/types').Language) => Promise<void>): Promise<void> {
+    async buildHostOffer(languageSelect: HTMLSelectElement, ensureLanguage: (lang: Language) => Promise<void>): Promise<void> {
         if (this.mode !== 'host') {
             this.appendLog('Switch to Host mode to create an offer.');
             return;
@@ -131,7 +133,9 @@ export class NetworkController {
             this.appendLog('Start a Host session first, then share the offer QR.');
             return;
         }
-        await ensureLanguage(languageSelect.value as import('../core/types').Language);
+        this.hostLanguageSelect = languageSelect;
+        this.hostEnsureLanguage = ensureLanguage;
+        await ensureLanguage(languageSelect.value as Language);
 
         const callbacks = this.buildCallbacks();
         if (this.connection) {
@@ -258,8 +262,18 @@ export class NetworkController {
         if (this.mode === 'host') {
             this.appendLog('Host: Connection lost. Recreating offer...');
             await new Promise(r => setTimeout(r, 500));
-            // Note: This would need languageSelect and ensureLanguage passed in
-            // await this.buildHostOffer(languageSelect, ensureLanguage);
+            if (!this.hostLanguageSelect || !this.hostEnsureLanguage) {
+                this.appendLog('Host: Could not recreate offer automatically. Please refresh and create a new offer.');
+                this.disconnectMessage.textContent = 'Connection lost. Please refresh and create a new host offer.';
+                return;
+            }
+            try {
+                await this.buildHostOffer(this.hostLanguageSelect, this.hostEnsureLanguage);
+                this.disconnectMessage.textContent = 'New offer ready. Share it with your opponent to reconnect.';
+            } catch (err) {
+                this.appendLog(`Host: Failed to recreate offer: ${String(err)}`);
+                this.disconnectMessage.textContent = 'Could not create a new offer automatically. Please refresh and try again.';
+            }
         } else if (this.mode === 'client') {
             this.appendLog('Client: Connection lost. Please re-scan host offer.');
             this.p2pStatus.textContent = 'Disconnected';

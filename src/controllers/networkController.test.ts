@@ -627,6 +627,44 @@ describe('NetworkController.triggerReconnect', () => {
       vi.useRealTimers();
     }
   });
+
+  it('rebuilds a host offer automatically after disconnect delay', async () => {
+    vi.useFakeTimers();
+    try {
+      nc.setMode('host');
+      nc.setMeta(makeFakeMeta());
+      nc.setCurrentState(makeFakeGameState());
+      await nc.buildHostOffer(makeLanguageSelect(), vi.fn().mockResolvedValue(undefined));
+
+      const reconnectPromise = nc.triggerReconnect();
+      vi.runAllTimers();
+      await reconnectPromise;
+
+      expect(mockCreateHost).toHaveBeenCalledTimes(2);
+      expect(p2pStatus.textContent).toBe('Offer created - waiting for answer');
+      expect(disconnectMessage.textContent).toContain('New offer ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to manual host reconnect guidance when no host setup context exists', async () => {
+    vi.useFakeTimers();
+    try {
+      nc.setMode('host');
+      const reconnectPromise = nc.triggerReconnect();
+      vi.runAllTimers();
+      await reconnectPromise;
+
+      expect(appendLog).toHaveBeenCalledWith(
+        expect.stringContaining('Could not recreate offer automatically')
+      );
+      expect(disconnectMessage.textContent).toContain('refresh');
+      expect(mockCreateHost).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ─── Auto-build client answer (setupAutoBuildClientAnswer) ────────────────────
