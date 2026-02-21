@@ -255,17 +255,8 @@ export class ScrabbleGame {
       };
     }
 
-    const ended = await this.checkGameEnd(checkWord, minWordLength);
-    if (ended.ended && ended.reason) {
-      this.applyEndGameScoring();
-      return {
-        success: true,
-        scoreDelta: scoreResult.score,
-        words: scoreResult.words,
-        gameEnded: { reason: ended.reason, finalScores: structuredClone(state.scores) }
-      };
-    }
-
+    // Expensive "no_moves_bag_empty" scan is handled by EndgameScanController worker flow.
+    // Keep placeMove hot-path free of brute-force dictionary scanning.
     return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
   }
 

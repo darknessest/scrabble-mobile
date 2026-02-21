@@ -200,6 +200,16 @@ describe('ScrabbleGame', () => {
         expect(game.getState().moveNumber).toBe(1);
     });
 
+    it('does not call checkGameEnd from placeMove hot path', async () => {
+        game.start('en', ['p1']);
+        const state = game.getState();
+        const checkGameEndSpy = vi.spyOn(game, 'checkGameEnd');
+
+        const result = await game.placeMove('p1', [{ x: 7, y: 7, tile: state.racks['p1'][0] }], mockCheckWord);
+        expect(result.success).toBe(true);
+        expect(checkGameEndSpy).not.toHaveBeenCalled();
+    });
+
     it('refills rack after move', async () => {
         game.start('en', ['p1']);
         const state = game.getState();

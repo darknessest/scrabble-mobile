@@ -132,5 +132,51 @@ describe('endgameScan (trie backtracking)', () => {
     const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
     expect(hasAny).toBe(true);
   });
-});
 
+  it('profiles dense-board scan path without timing out', () => {
+    const board = emptyBoard();
+    const letters = ['A', 'E', 'I', 'O', 'N', 'R', 'S', 'T'];
+    let idx = 0;
+    for (let y = 0; y < 15; y += 1) {
+      for (let x = 0; x < 15; x += 1) {
+        if ((x + y) % 3 === 0) continue;
+        board[y][x].tile = makeTile(letters[idx % letters.length]);
+        idx += 1;
+      }
+    }
+
+    const state = makeState({
+      board,
+      racks: { p1: [makeTile('A'), makeTile('R'), makeTile('T'), makeTile('E'), makeTile('S')] }
+    });
+
+    const words = new Set<string>();
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const a of ['A', 'E', 'I', 'O', 'U', 'R', 'S', 'T', 'N', 'L']) {
+      for (const b of ['A', 'E', 'I', 'O', 'U', 'R', 'S', 'T', 'N', 'L']) {
+        words.add(`${a}${b}`);
+        words.add(`${a}${b}${a}`);
+      }
+    }
+    words.add('ART');
+    words.add('RATE');
+    words.add('STARE');
+
+    const letterToIndex = __testing.buildLetterToIndex(alphabet);
+    const root = __testing.buildTrie(words, letterToIndex);
+    const t0 = performance.now();
+    const cross = __testing.computeCrossMasks(state.board, alphabet, letterToIndex, words, 2);
+
+    const anchors = [];
+    for (let y = 0; y < 15; y += 1) {
+      for (let x = 0; x < 15; x += 1) {
+        if (!state.board[y][x].tile) anchors.push({ x, y });
+      }
+    }
+    const hasAny = __testing.hasAnyValidMoveFast(state, 'p1', anchors, root, letterToIndex, cross, alphabet.length, 2);
+    const elapsedMs = performance.now() - t0;
+
+    expect(typeof hasAny).toBe('boolean');
+    expect(elapsedMs).toBeLessThan(5000);
+  });
+});
