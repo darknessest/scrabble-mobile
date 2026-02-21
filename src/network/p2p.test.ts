@@ -504,6 +504,57 @@ describe('P2P Network', () => {
     });
   });
 
+  describe('waitForIce timeout', () => {
+    it('rejects host offer creation when ICE gathering stalls', async () => {
+      vi.useFakeTimers();
+      try {
+        global.RTCPeerConnection = class extends MockRTCPeerConnection {
+          constructor(config: RTCConfiguration) {
+            super(config);
+            this.iceGatheringState = 'gathering';
+            createdPCs.push(this);
+          }
+          async setLocalDescription(desc: RTCSessionDescriptionInit) {
+            this.localDescription = desc;
+            // Intentionally never reaches "complete" and never emits event.
+          }
+        } as unknown as typeof RTCPeerConnection;
+
+        const hostPromise = createHost({ onMessage: vi.fn() });
+        const rejection = expect(hostPromise).rejects.toThrow('ICE gathering timed out');
+        await vi.advanceTimersByTimeAsync(15_100);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('rejects client answer creation when ICE gathering stalls', async () => {
+      vi.useFakeTimers();
+      try {
+        global.RTCPeerConnection = class extends MockRTCPeerConnection {
+          constructor(config: RTCConfiguration) {
+            super(config);
+            this.iceGatheringState = 'gathering';
+            createdPCs.push(this);
+          }
+          async setLocalDescription(desc: RTCSessionDescriptionInit) {
+            this.localDescription = desc;
+            // Intentionally never reaches "complete" and never emits event.
+          }
+        } as unknown as typeof RTCPeerConnection;
+
+        const offer = btoa(JSON.stringify({ type: 'offer', sdp: 'mock-sdp' }));
+        const clientPromise = createClient({ onMessage: vi.fn() }, offer);
+        const rejection = expect(clientPromise).rejects.toThrow('ICE gathering timed out');
+        await vi.advanceTimersByTimeAsync(15_100);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // ─── Two-peer loopback simulation ─────────────────────────────────────────
 
   describe('Two-peer loopback simulation', () => {

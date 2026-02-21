@@ -19,6 +19,7 @@ type ChannelRef = { current: RTCDataChannel | null };
 const rtcConfig: RTCConfiguration = {
   iceServers: []
 };
+const ICE_GATHERING_TIMEOUT_MS = 15_000;
 
 export async function createHost(callbacks: P2PCallbacks) {
   const pc = new RTCPeerConnection(rtcConfig);
@@ -126,13 +127,20 @@ function waitForIce(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === 'complete') {
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const check = () => {
       if (pc.iceGatheringState === 'complete') {
+        clearTimeout(timeoutId);
         pc.removeEventListener('icegatheringstatechange', check);
         resolve();
       }
     };
+
+    const timeoutId = setTimeout(() => {
+      pc.removeEventListener('icegatheringstatechange', check);
+      reject(new Error(`ICE gathering timed out after ${ICE_GATHERING_TIMEOUT_MS / 1000} seconds.`));
+    }, ICE_GATHERING_TIMEOUT_MS);
+
     pc.addEventListener('icegatheringstatechange', check);
   });
 }
@@ -151,4 +159,3 @@ function wirePeerLogging(pc: RTCPeerConnection, role: 'host' | 'client', callbac
     }
   };
 }
-
