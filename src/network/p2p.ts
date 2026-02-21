@@ -115,7 +115,11 @@ function encodeSDP(desc: RTCSessionDescriptionInit): string {
 }
 
 function decodeSDP(data: string): RTCSessionDescriptionInit {
-  return JSON.parse(atob(data)) as RTCSessionDescriptionInit;
+  try {
+    return JSON.parse(atob(data)) as RTCSessionDescriptionInit;
+  } catch {
+    throw new Error('Invalid connection data. Please check the offer/answer and try again.');
+  }
 }
 
 function waitForIce(pc: RTCPeerConnection): Promise<void> {

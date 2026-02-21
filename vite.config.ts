@@ -45,7 +45,7 @@ function getVersion() {
 }
 
 function dictionarySources(repo: string): DictionarySource[] {
-  const baseUrl = ` https://github.com/${repo}/raw/refs/heads/assets/dicts`;
+  const baseUrl = `https://github.com/${repo}/raw/refs/heads/assets/dicts`;
   return [
     { filename: 'en.json.gz', url: `${baseUrl}/en.json.gz` },
     { filename: 'ru.json.gz', url: `${baseUrl}/ru.json.gz` },
@@ -225,10 +225,12 @@ export default defineConfig(({ command }) => {
     test: {
       globals: true,
       environment: 'node',
+      testTimeout: 5000,
       include: ['src/**/*.test.ts'],
       coverage: {
         provider: 'v8',
-        include: ['src/core/**', 'src/dictionary/**', 'src/controllers/**', 'src/utils/**']
+        include: ['src/**'],
+        exclude: ['src/**/*.test.ts']
       }
     }
   };

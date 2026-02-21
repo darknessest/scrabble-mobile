@@ -1,13 +1,11 @@
-const CACHE_NAME = 'scrabble-pwa-v3';
+const CACHE_NAME = 'scrabble-pwa-v4';
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const CORE_ASSETS = [
   `${BASE_PATH}`,
   `${BASE_PATH}index.html`,
   `${BASE_PATH}manifest.webmanifest`,
   `${BASE_PATH}icons/icon-192.png`,
-  `${BASE_PATH}icons/icon-512.png`,
-  `${BASE_PATH}dicts/en-basic.txt`,
-  `${BASE_PATH}dicts/ru-basic.txt`
+  `${BASE_PATH}icons/icon-512.png`
 ];
 
 self.addEventListener('install', (event) => {

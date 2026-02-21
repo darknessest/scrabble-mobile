@@ -1,6 +1,7 @@
 import type { SessionMeta } from '../types';
 import type { GameState } from '../core/types';
 import { formatGameOverReason } from '../utils/appUtils';
+import { escapeHtml } from '../utils/escapeHtml';
 
 export class GameOverController {
     private meta: SessionMeta | null = null;
@@ -111,7 +112,7 @@ export class GameOverController {
 
         const ev = meta.gameOver;
         const scoresText = Object.entries(ev.finalScores)
-            .map(([id, score]) => `${this.labels[id] ?? id}: ${score}`)
+            .map(([id, score]) => `${escapeHtml(this.labels[id] ?? id)}: ${score}`)
             .join(' • ');
 
         this.gameOverReasonEl.textContent = formatGameOverReason(ev.reason);
@@ -119,10 +120,10 @@ export class GameOverController {
 
         const stats = this.computeEndgameStats();
         const bestMoveText = stats.bestMove
-            ? `${this.labels[stats.bestMove.playerId] ?? stats.bestMove.playerId}: +${stats.bestMove.scoreDelta}`
+            ? `${escapeHtml(this.labels[stats.bestMove.playerId] ?? stats.bestMove.playerId)}: +${stats.bestMove.scoreDelta}`
             : '—';
         const longestWordText = stats.longestWord
-            ? `${stats.longestWord.word} (${this.labels[stats.longestWord.playerId] ?? stats.longestWord.playerId})`
+            ? `${escapeHtml(stats.longestWord.word)} (${escapeHtml(this.labels[stats.longestWord.playerId] ?? stats.longestWord.playerId)})`
             : '—';
 
         this.gameOverStatsEl.innerHTML = [
