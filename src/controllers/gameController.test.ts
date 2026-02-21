@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GameController } from './gameController';
+import type { Placement } from '../core/types';
+import type { SessionMeta } from '../types';
 
 // Mock the dictionary service
 vi.mock('../dictionary/dictionaryService', () => ({
@@ -69,6 +71,157 @@ describe('shuffleRack', () => {
     }
     // With 7! = 5040 permutations, 20 attempts virtually guarantees a different order
     expect(different).toBe(true);
+  });
+});
+
+describe('submitMove / submitRemoteMove', () => {
+  it('submits a successful local move and clears placements', async () => {
+    const onRenderAll = vi.fn();
+    const onPersist = vi.fn().mockResolvedValue(undefined);
+    const onSync = vi.fn();
+    const onGameEnd = vi.fn();
+    gc.setOnRenderAll(onRenderAll);
+    gc.setOnPersist(onPersist);
+    gc.setOnSync(onSync);
+    gc.setOnGameEnd(onGameEnd);
+
+    const state = gc.start('en', ['p1', 'p2']);
+    gc.setMeta({
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId
+    });
+
+    const placements: Placement[] = [{ x: 7, y: 7, tile: state.racks['p1'][0] }];
+    (gc as unknown as { placements: Placement[] }).placements = placements;
+
+    const placeMoveSpy = vi.spyOn(gc.getGame(), 'placeMove').mockResolvedValue({
+      success: true,
+      words: ['A'],
+      scoreDelta: 2
+    });
+
+    const result = await gc.submitMove(() => vi.fn().mockResolvedValue(true));
+    expect(result).toBe(true);
+    expect(placeMoveSpy).toHaveBeenCalledWith('p1', placements, expect.any(Function), undefined);
+    expect(gc.getPlacements()).toEqual([]);
+    expect(onRenderAll).toHaveBeenCalled();
+    expect(onPersist).toHaveBeenCalled();
+    expect(onSync).toHaveBeenCalled();
+    expect(onGameEnd).toHaveBeenCalled();
+  });
+
+  it('returns false and logs on failed local move (invalid word)', async () => {
+    const appendLog = vi.fn();
+    const localGc = new GameController(appendLog);
+    const state = localGc.start('en', ['p1']);
+    localGc.setMeta({
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId
+    });
+    (localGc as unknown as { placements: Placement[] }).placements = [{ x: 7, y: 7, tile: state.racks['p1'][0] }];
+    vi.spyOn(localGc.getGame(), 'placeMove').mockResolvedValue({
+      success: false,
+      message: 'Invalid word: ZZ'
+    });
+
+    const result = await localGc.submitMove(() => vi.fn().mockResolvedValue(false));
+    expect(result).toBe(false);
+    expect(appendLog).toHaveBeenCalledWith('Invalid word: ZZ');
+  });
+
+  it('resets timer deadline after successful move', async () => {
+    const state = gc.start('en', ['p1', 'p2']);
+    const meta: SessionMeta = {
+      mode: 'solo' as const,
+      language: 'en' as const,
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId,
+      timerEnabled: true,
+      timerDurationSec: 300,
+      turnDeadline: Date.now() + 30_000
+    };
+    gc.setMeta(meta);
+    (gc as unknown as { placements: Placement[] }).placements = [{ x: 7, y: 7, tile: state.racks['p1'][0] }];
+    vi.spyOn(gc.getGame(), 'placeMove').mockResolvedValue({ success: true, words: ['A'], scoreDelta: 2 });
+
+    const result = await gc.submitMove(() => vi.fn().mockResolvedValue(true));
+    expect(result).toBe(true);
+    expect(meta.turnDeadline).toBeNull();
+  });
+
+  it('handles gameEnded move result by writing meta.gameOver and resyncing', async () => {
+    const onPersist = vi.fn().mockResolvedValue(undefined);
+    const onSync = vi.fn();
+    const onGameEnd = vi.fn();
+    gc.setOnPersist(onPersist);
+    gc.setOnSync(onSync);
+    gc.setOnGameEnd(onGameEnd);
+
+    const state = gc.start('en', ['p1', 'p2']);
+    const meta: SessionMeta = {
+      mode: 'solo' as const,
+      language: 'en' as const,
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId
+    };
+    gc.setMeta(meta);
+    (gc as unknown as { placements: Placement[] }).placements = [{ x: 7, y: 7, tile: state.racks['p1'][0] }];
+    vi.spyOn(gc.getGame(), 'placeMove').mockResolvedValue({
+      success: true,
+      words: ['A'],
+      scoreDelta: 2,
+      gameEnded: {
+        reason: 'four_passes',
+        finalScores: { p1: 10, p2: 8 }
+      }
+    });
+
+    const result = await gc.submitMove(() => vi.fn().mockResolvedValue(true));
+    expect(result).toBe(true);
+    expect(meta.gameOver?.reason).toBe('four_passes');
+    expect(meta.gameOver?.finalScores).toEqual({ p1: 10, p2: 8 });
+    expect(onPersist).toHaveBeenCalledTimes(2);
+    expect(onSync).toHaveBeenCalledTimes(2);
+    expect(onGameEnd).toHaveBeenCalled();
+  });
+
+  it('submits remote move using provided remote playerId', async () => {
+    const onSync = vi.fn();
+    gc.setOnSync(onSync);
+    const state = gc.start('en', ['host', 'client']);
+    const meta: SessionMeta = {
+      mode: 'host' as const,
+      language: 'en' as const,
+      isHost: true,
+      localPlayerId: 'host',
+      remotePlayerId: 'client',
+      sessionId: state.sessionId,
+      timerEnabled: true,
+      timerDurationSec: 300,
+      turnDeadline: Date.now() + 20_000
+    };
+    gc.setMeta(meta);
+
+    const placements: Placement[] = [{ x: 7, y: 7, tile: state.racks['host'][0] }];
+    const placeMoveSpy = vi.spyOn(gc.getGame(), 'placeMove').mockResolvedValue({
+      success: true,
+      words: ['A'],
+      scoreDelta: 2
+    });
+
+    const result = await gc.submitRemoteMove(placements, 'client', () => vi.fn().mockResolvedValue(true));
+    expect(result).toBe(true);
+    expect(placeMoveSpy).toHaveBeenCalledWith('client', placements, expect.any(Function), undefined);
+    expect(meta.turnDeadline).toBeNull();
+    expect(onSync).toHaveBeenCalled();
   });
 });
 
