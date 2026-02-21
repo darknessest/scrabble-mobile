@@ -1,13 +1,17 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ScrabbleGame } from './game';
 import type { Placement } from './types';
 
 // Mock crypto.randomUUID
 let uuidCounter = 0;
-Object.defineProperty(global, 'crypto', {
-    value: {
+beforeAll(() => {
+    vi.stubGlobal('crypto', {
         randomUUID: () => `test-uuid-${uuidCounter++}`
-    }
+    });
+});
+
+afterAll(() => {
+    vi.unstubAllGlobals();
 });
 
 describe('ScrabbleGame Integration', () => {
@@ -73,6 +77,7 @@ describe('ScrabbleGame Integration', () => {
         rack.forEach((t) => {
             t.letter = 'A';
             t.value = 1;
+            t.blank = undefined;
         });
 
         // Place all 7 tiles horizontally across center
@@ -100,7 +105,7 @@ describe('ScrabbleGame Integration', () => {
         const rack1 = state.racks['p1'];
         // Hack letters
         const letters1 = ['F', 'A', 'S', 'T'];
-        letters1.forEach((l, i) => { rack1[i].letter = l; rack1[i].value = 1; }); // simplified values
+        letters1.forEach((l, i) => { rack1[i].letter = l; rack1[i].value = 1; rack1[i].blank = undefined; });
 
         let placements: Placement[] = letters1.map((_, i) => ({
             x: 7 + i, y: 7, tile: rack1[i]
@@ -115,7 +120,7 @@ describe('ScrabbleGame Integration', () => {
         state = game.getState();
         const rack2 = state.racks['p2'];
         const letters2 = ['A', 'C', 'E'];
-        letters2.forEach((l, i) => { rack2[i].letter = l; rack2[i].value = 1; });
+        letters2.forEach((l, i) => { rack2[i].letter = l; rack2[i].value = 1; rack2[i].blank = undefined; });
 
         placements = letters2.map((_, i) => ({
             x: 7 + i, y: 8, tile: rack2[i]
@@ -142,7 +147,7 @@ describe('ScrabbleGame Integration', () => {
 
         // 1. Try to place "HELLO" - should succeed
         const letters = ['H', 'E', 'L', 'L', 'O'];
-        letters.forEach((l, i) => { rack[i].letter = l; rack[i].value = 1; });
+        letters.forEach((l, i) => { rack[i].letter = l; rack[i].value = 1; rack[i].blank = undefined; });
 
         let placements: Placement[] = letters.map((_, i) => ({
             x: 7, y: 7 + i, tile: rack[i] // Vertical at 7,7

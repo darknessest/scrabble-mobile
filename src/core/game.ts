@@ -66,14 +66,28 @@ export class ScrabbleGame {
 
   /**
    * Ends the game scoring: subtract remaining rack values from each player's score.
+   * Standard Scrabble: the player who went out (empty rack) gets the sum of all
+   * opponents' remaining tile values as a bonus.
    * Caller is responsible for ensuring this is applied only once.
    */
   applyEndGameScoring(): void {
     const state = this.getState();
+    let totalPenalty = 0;
+    let emptyRackPlayer: string | null = null;
+
     for (const playerId of state.players) {
       const rack = state.racks[playerId] ?? [];
       const penalty = rack.reduce((sum, t) => sum + (t.value ?? 0), 0);
       state.scores[playerId] = (state.scores[playerId] ?? 0) - penalty;
+      totalPenalty += penalty;
+      if (rack.length === 0) {
+        emptyRackPlayer = playerId;
+      }
+    }
+
+    // Standard Scrabble: player who went out gets the sum of all opponents' remaining tiles
+    if (emptyRackPlayer !== null) {
+      state.scores[emptyRackPlayer] += totalPenalty;
     }
   }
 
@@ -88,7 +102,16 @@ export class ScrabbleGame {
       return { ended: true, reason: 'four_passes' };
     }
 
-    // Condition 2: bag empty AND no valid moves for all players.
+    // Condition 2: a player has an empty rack with empty bag
+    if (state.bag.length === 0) {
+      for (const pid of state.players) {
+        if ((state.racks[pid] ?? []).length === 0) {
+          return { ended: true, reason: 'rack_empty_bag_empty' };
+        }
+      }
+    }
+
+    // Condition 3: bag empty AND no valid moves for all players.
     // Performance heuristic: only do the expensive scan once the bag is < 50% of initial.
     const initialBag = getInitialBagSize(state.language);
     const shouldRunExpensive = state.bag.length < initialBag / 2;
@@ -144,6 +167,9 @@ export class ScrabbleGame {
     }
     if (!playerHasTiles(state.racks[playerId], placements.map((p) => p.tile.id))) {
       return { success: false, message: 'Tile not in rack' };
+    }
+    if (placements.some((p) => p.tile.blank && p.tile.value !== 0)) {
+      return { success: false, message: 'Blank tiles must have value 0' };
     }
     if (!placements.every((p) => state.board[p.y][p.x].tile === null)) {
       return { success: false, message: 'Cell already occupied' };
@@ -218,6 +244,17 @@ export class ScrabbleGame {
       timestamp: Date.now()
     });
 
+    // Check "going out": rack empty with bag empty ends the game immediately
+    if (state.bag.length === 0 && state.racks[playerId].length === 0) {
+      this.applyEndGameScoring();
+      return {
+        success: true,
+        scoreDelta: scoreResult.score,
+        words: scoreResult.words,
+        gameEnded: { reason: 'rack_empty_bag_empty', finalScores: structuredClone(state.scores) }
+      };
+    }
+
     const ended = await this.checkGameEnd(checkWord, minWordLength);
     if (ended.ended && ended.reason) {
       this.applyEndGameScoring();
@@ -263,8 +300,8 @@ export class ScrabbleGame {
     if (tileIds.length === 0) {
       return { success: false, message: 'Choose tiles to exchange' };
     }
-    if (state.bag.length < tileIds.length) {
-      return { success: false, message: 'Not enough tiles in bag' };
+    if (state.bag.length < 7) {
+      return { success: false, message: 'Not enough tiles in bag to exchange (need at least 7)' };
     }
     if (!playerHasTiles(state.racks[playerId], tileIds)) {
       return { success: false, message: 'Tile not in rack' };

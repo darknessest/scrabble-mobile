@@ -261,6 +261,98 @@ describe('ScrabbleGame', () => {
         expect(ended.reason).toBe('no_moves_bag_empty');
     });
 
+    describe('exchangeTiles bag minimum (7 tiles)', () => {
+        it('succeeds when bag has exactly 7 tiles', () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.bag = [
+                { id: 'b1', letter: 'A', value: 1 },
+                { id: 'b2', letter: 'B', value: 3 },
+                { id: 'b3', letter: 'C', value: 3 },
+                { id: 'b4', letter: 'D', value: 2 },
+                { id: 'b5', letter: 'E', value: 1 },
+                { id: 'b6', letter: 'F', value: 4 },
+                { id: 'b7', letter: 'G', value: 2 }
+            ];
+            const rack = state.racks['p1'];
+            const result = game.exchangeTiles('p1', [rack[0].id]);
+            expect(result.success).toBe(true);
+        });
+
+        it('fails when bag has 6 tiles', () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.bag = [
+                { id: 'b1', letter: 'A', value: 1 },
+                { id: 'b2', letter: 'B', value: 3 },
+                { id: 'b3', letter: 'C', value: 3 },
+                { id: 'b4', letter: 'D', value: 2 },
+                { id: 'b5', letter: 'E', value: 1 },
+                { id: 'b6', letter: 'F', value: 4 }
+            ];
+            const rack = state.racks['p1'];
+            const result = game.exchangeTiles('p1', [rack[0].id]);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Not enough tiles in bag to exchange (need at least 7)');
+        });
+
+        it('fails when bag has 0 tiles', () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.bag = [];
+            const rack = state.racks['p1'];
+            const result = game.exchangeTiles('p1', [rack[0].id]);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Not enough tiles in bag to exchange (need at least 7)');
+        });
+    });
+
+    describe('blank tile value validation in placeMove', () => {
+        it('rejects blank tile with value > 0', async () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.racks['p1'] = [
+                { id: 'b1', letter: ' ', value: 0, blank: true },
+                { id: 't1', letter: 'A', value: 1 },
+                { id: 't2', letter: 'B', value: 3 },
+                { id: 't3', letter: 'C', value: 3 },
+                { id: 't4', letter: 'D', value: 2 },
+                { id: 't5', letter: 'E', value: 1 },
+                { id: 't6', letter: 'F', value: 4 }
+            ];
+
+            const placements: Placement[] = [
+                { x: 7, y: 7, tile: { id: 'b1', letter: 'Z', value: 10, blank: true } }
+            ];
+
+            const result = await game.placeMove('p1', placements, mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Blank tiles must have value 0');
+        });
+
+        it('accepts blank tile with value = 0', async () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            state.racks['p1'] = [
+                { id: 'b1', letter: ' ', value: 0, blank: true },
+                { id: 't1', letter: 'A', value: 1 },
+                { id: 't2', letter: 'B', value: 3 },
+                { id: 't3', letter: 'C', value: 3 },
+                { id: 't4', letter: 'D', value: 2 },
+                { id: 't5', letter: 'E', value: 1 },
+                { id: 't6', letter: 'F', value: 4 }
+            ];
+
+            const placements: Placement[] = [
+                { x: 7, y: 7, tile: { id: 'b1', letter: 'A', value: 0, blank: true } },
+                { x: 8, y: 7, tile: { id: 't1', letter: 'A', value: 1 } }
+            ];
+
+            const result = await game.placeMove('p1', placements, mockCheckWord);
+            expect(result.success).toBe(true);
+        });
+    });
+
     describe('applyEndGameScoring', () => {
         it('subtracts rack tile values from each player score', () => {
             game.start('en', ['p1', 'p2']);
@@ -291,7 +383,7 @@ describe('ScrabbleGame', () => {
             expect(state.scores['p1']).toBe(-15); // 5 - 20
         });
 
-        it('empty rack incurs no penalty', () => {
+        it('empty rack gets going-out bonus', () => {
             game.start('en', ['p1', 'p2']);
             const state = game.getState();
             state.scores['p1'] = 15;
@@ -301,7 +393,7 @@ describe('ScrabbleGame', () => {
 
             game.applyEndGameScoring();
 
-            expect(state.scores['p1']).toBe(15); // no penalty
+            expect(state.scores['p1']).toBe(16); // no penalty + bonus of 1 (opponent's tiles)
             expect(state.scores['p2']).toBe(9);  // 10 - 1
         });
     });

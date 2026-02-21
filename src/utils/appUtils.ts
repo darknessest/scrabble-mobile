@@ -40,5 +40,6 @@ export function formatCountdownMs(ms: number): string {
 
 export function formatGameOverReason(reason: import('../core/types').GameEndReason): string {
     if (reason === 'four_passes') return 'Both players passed twice in a row.';
+    if (reason === 'rack_empty_bag_empty') return 'A player used all their tiles with no tiles left in the bag.';
     return 'No tiles left in the bag and no valid moves available.';
 }

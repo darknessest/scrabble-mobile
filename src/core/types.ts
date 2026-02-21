@@ -48,7 +48,7 @@ export interface GameState {
   sessionId: string;
 }
 
-export type GameEndReason = 'four_passes' | 'no_moves_bag_empty';
+export type GameEndReason = 'four_passes' | 'no_moves_bag_empty' | 'rack_empty_bag_empty';
 
 export interface GameEndedInfo {
   reason: GameEndReason;
