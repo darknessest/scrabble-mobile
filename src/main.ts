@@ -20,6 +20,7 @@ import {
   renderVersion
 } from './ui/uiRenderer';
 import { appendLog as appendLogUtil, formatGameOverReason } from './utils/appUtils';
+import { buildSyncStateForPeer } from './utils/syncState';
 
 declare const __APP_VERSION__: string;
 const BASE_PATH = import.meta.env.BASE_URL ?? '/';
@@ -135,9 +136,10 @@ function renderAll(): void {
 function sendSync(): void {
   const gameState = gameController.getState();
   if (!gameState || !state.meta) return;
+  const syncState = buildSyncStateForPeer(gameState, state.meta);
   controllers.networkController.send({
     type: 'SYNC_STATE',
-    state: gameState,
+    state: syncState,
     meta: state.meta,
     labels: state.labels
   });
