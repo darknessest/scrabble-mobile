@@ -646,9 +646,11 @@ function collectFormedWords(
 
   const addWord = (dir: Orientation, cells: Array<{ x: number; y: number; tile: Tile; premium?: Premium }>) => {
     if (cells.length === 0) return;
+    const word = cells.map((c) => c.tile.letter).join('');
+    if (word.length === 0) return;
     const key = `${dir}:${cells[0].x},${cells[0].y}`;
     if (wordsByKey.has(key)) return;
-    wordsByKey.set(key, { word: cells.map((c) => c.tile.letter).join(''), cells });
+    wordsByKey.set(key, { word, cells });
   };
 
   // Add the primary word (even if length 1).
@@ -746,4 +748,3 @@ function nextPlayer(players: string[], current: string): string {
   const next = (idx + 1) % players.length;
   return players[next];
 }
-

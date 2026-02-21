@@ -67,6 +67,101 @@ describe('ScrabbleGame', () => {
         expect(result.message).toContain('Tile not in rack');
     });
 
+    describe('placeMove validation edge cases', () => {
+        it('rejects move when it is not the player turn', async () => {
+            game.start('en', ['p1', 'p2']);
+            const state = game.getState();
+            const tile = state.racks['p2'][0];
+
+            const result = await game.placeMove('p2', [{ x: 7, y: 7, tile }], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Not your turn');
+        });
+
+        it('rejects move with no placements', async () => {
+            game.start('en', ['p1']);
+
+            const result = await game.placeMove('p1', [], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Place at least one tile');
+        });
+
+        it('rejects placement outside the board', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            const tile = state.racks['p1'][0];
+
+            const result = await game.placeMove('p1', [{ x: -1, y: 7, tile }], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Placement outside board');
+        });
+
+        it('rejects placement on an occupied cell', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            const [first] = state.racks['p1'];
+            await game.placeMove('p1', [{ x: 7, y: 7, tile: first }], mockCheckWord);
+            const nextRack = game.getState().racks['p1'];
+
+            const result = await game.placeMove('p1', [{ x: 7, y: 7, tile: nextRack[0] }], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Cell already occupied');
+        });
+
+        it('rejects diagonal placement (must align in row or column)', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            const [a, b] = state.racks['p1'];
+
+            const result = await game.placeMove('p1', [
+                { x: 7, y: 7, tile: a },
+                { x: 8, y: 8, tile: b }
+            ], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Tiles must align in a row or column');
+        });
+
+        it('rejects non-connecting move after board is no longer empty', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            const rack = state.racks['p1'];
+            await game.placeMove('p1', [{ x: 7, y: 7, tile: rack[0] }], mockCheckWord);
+            const nextRack = game.getState().racks['p1'];
+
+            const result = await game.placeMove('p1', [{ x: 0, y: 0, tile: nextRack[0] }], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Move must connect to existing tiles');
+        });
+
+        it('rejects non-contiguous line even when alignment and connection checks pass', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            const rack = state.racks['p1'];
+            await game.placeMove('p1', [
+                { x: 7, y: 7, tile: rack[0] },
+                { x: 8, y: 7, tile: rack[1] }
+            ], mockCheckWord);
+            const nextRack = game.getState().racks['p1'];
+
+            const result = await game.placeMove('p1', [
+                { x: 6, y: 7, tile: nextRack[0] },
+                { x: 10, y: 7, tile: nextRack[1] }
+            ], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Tiles must form a contiguous line');
+        });
+
+        it('rejects move when no valid word is formed', async () => {
+            game.start('en', ['p1']);
+            const state = game.getState();
+            state.racks['p1'][0] = { ...state.racks['p1'][0], letter: '' };
+
+            const result = await game.placeMove('p1', [{ x: 7, y: 7, tile: state.racks['p1'][0] }], mockCheckWord);
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('No valid word formed');
+        });
+    });
+
     it('accepts valid first move', async () => {
         game.start('en', ['p1']);
         const state = game.getState();
@@ -398,4 +493,3 @@ describe('ScrabbleGame', () => {
         });
     });
 });
-
