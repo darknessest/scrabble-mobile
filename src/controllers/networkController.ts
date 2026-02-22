@@ -4,6 +4,7 @@ import type { P2PCallbacks, P2PConnection } from '../network/p2p';
 import { createClient, createHost } from '../network/p2p';
 import { toQrDataUrl } from '../network/qr';
 import { debounce, looksLikeEncodedSdp } from '../utils/appUtils';
+import { nextSequence } from '../utils/messageSequence';
 
 export class NetworkController {
     private connection: P2PConnection | null = null;
@@ -58,14 +59,51 @@ export class NetworkController {
 
     setMeta(meta: SessionMeta | null): void {
         this.meta = meta;
+        if (this.meta && !this.meta.messageSequence) {
+            this.meta.messageSequence = {
+                lastSentByPeer: {},
+                lastReceivedByPeer: {}
+            };
+        }
     }
 
     setCurrentState(state: GameState | null): void {
         this.currentState = state;
     }
 
-    setLabels(_labels: Record<string, string>): void {
-        // Labels are managed externally
+    setLabels(labels: Record<string, string>): void {
+        void labels;
+    }
+
+    private getActivePeerId(): string | null {
+        return this.meta?.remotePlayerId ?? null;
+    }
+
+    private getSequenceState(meta: SessionMeta): NonNullable<SessionMeta['messageSequence']> {
+        if (!meta.messageSequence) {
+            meta.messageSequence = {
+                lastSentByPeer: {},
+                lastReceivedByPeer: {}
+            };
+        }
+        return meta.messageSequence;
+    }
+
+    private decorateWithSequenceMetadata(data: ActionMessage): ActionMessage {
+        const peerId = this.getActivePeerId();
+        if (!peerId || !this.meta) {
+            return data;
+        }
+
+        const sequenceState = this.getSequenceState(this.meta);
+        const next = nextSequence(sequenceState.lastSentByPeer[peerId]);
+        sequenceState.lastSentByPeer[peerId] = next;
+
+        return {
+            ...data,
+            seq: next,
+            ack: sequenceState.lastReceivedByPeer[peerId] ?? 0
+        };
     }
 
     setMode(mode: 'solo' | 'host' | 'client'): void {
@@ -199,7 +237,8 @@ export class NetworkController {
     }
 
     send(data: ActionMessage): void {
-        this.connection?.send(data);
+        const withSequence = this.decorateWithSequenceMetadata(data);
+        this.connection?.send(withSequence);
     }
 
     private showDisconnectOverlay(message?: string): void {

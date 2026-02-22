@@ -303,6 +303,31 @@ describe('NetworkController.send', () => {
     expect(mockConn.send).toHaveBeenCalled();
   });
 
+  it('adds sequence metadata and increments seq per peer', async () => {
+    await setupHostWithConnection();
+
+    nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+    nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+
+    const firstCall = vi.mocked(mockConn.send).mock.calls[0]?.[0] as { seq: number };
+    const secondCall = vi.mocked(mockConn.send).mock.calls[1]?.[0] as { seq: number };
+
+    expect(firstCall.seq).toBe(1);
+    expect(secondCall.seq).toBe(2);
+  });
+
+  it('includes the latest acknowledged seq from peer in ack', async () => {
+    await setupHostWithConnection();
+
+    const sequence = nc['meta']?.messageSequence ?? { lastSentByPeer: {}, lastReceivedByPeer: {} };
+    nc['meta']!.messageSequence = sequence;
+    nc['meta']!.messageSequence.lastReceivedByPeer.client = 41;
+    nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+
+    const payload = vi.mocked(mockConn.send).mock.calls[0]?.[0] as { ack: number };
+    expect(payload.ack).toBe(41);
+  });
+
   it('is a no-op when there is no connection', () => {
     // No setupHostWithConnection — connection is null
     expect(() => {
