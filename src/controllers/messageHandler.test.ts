@@ -5,6 +5,7 @@ import type { GameState } from '../core/types';
 import type { Controllers } from './controllerWiring';
 import type { UiElements } from '../ui/uiRenderer';
 import type { AdditionalElements } from '../ui/domElements';
+import { makeMockControllers } from './testFixtures';
 
 vi.mock('./controllerBus', () => ({
   propagateMeta: vi.fn()
@@ -33,130 +34,18 @@ function makeFakeGameState(overrides: Partial<GameState> = {}): GameState {
   } as unknown as GameState;
 }
 
-function makeFakeHostMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
-  return {
-    mode: 'host',
-    language: 'en',
-    isHost: true,
-    localPlayerId: 'host',
-    remotePlayerId: 'client',
-    sessionId: 'test-session',
-    ...overrides
-  };
-}
-
-function makeMockControllers(): Controllers {
-  return {
-    gameController: {
-      resume: vi.fn(),
-      getState: vi.fn().mockReturnValue(makeFakeGameState()),
-      submitRemoteMove: vi.fn().mockResolvedValue(true),
-      submitPass: vi.fn().mockResolvedValue(true),
-      submitExchange: vi.fn().mockResolvedValue(true),
-      setRemoteDraft: vi.fn(),
-      updateValidation: vi.fn(),
-      buildWordChecker: vi.fn(),
-      submitMove: vi.fn(),
-      start: vi.fn(),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      getPlacements: vi.fn().mockReturnValue([]),
-      clearPlacements: vi.fn(),
-      getSelectedTileId: vi.fn().mockReturnValue(null),
-      setSelectedTileId: vi.fn(),
-      getRemoteDraft: vi.fn(),
-      getRackOrder: vi.fn().mockReturnValue([]),
-      getRackOrderSessionId: vi.fn(),
-      getValidationStatus: vi.fn().mockReturnValue('idle'),
-      getValidationMessage: vi.fn(),
-      setOnValidationUpdate: vi.fn(),
-      setOnGameEnd: vi.fn(),
-      setOnPersist: vi.fn(),
-      setOnSync: vi.fn(),
-      setOnRenderAll: vi.fn(),
-      syncLocalRackOrder: vi.fn(),
-      shuffleRack: vi.fn(),
-      resetForRematch: vi.fn(),
-      placeSelectedTileAt: vi.fn(),
-      removePlacementAt: vi.fn(),
-      maybeAutoPassOnTimeout: vi.fn(),
-      getGame: vi.fn()
-    },
-    timerController: {
-      startTimerTicker: vi.fn(),
-      stopTimerTicker: vi.fn(),
-      resetTurnTimer: vi.fn(),
-      setMeta: vi.fn(),
-      setConnection: vi.fn(),
-      setOnTimeout: vi.fn()
-    },
-    readyGate: {
-      isReadyGateEnabled: vi.fn().mockReturnValue(true),
-      maybeScheduleGameStartFromReady: vi.fn().mockResolvedValue(undefined),
-      isPreGameLocked: vi.fn().mockReturnValue(false),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      setOnUnlock: vi.fn()
-    },
-    storageController: {
-      persistSnapshot: vi.fn().mockResolvedValue(undefined),
-      checkSavedSnapshot: vi.fn(),
-      clearSavedSnapshot: vi.fn(),
-      getPendingSnapshot: vi.fn()
-    },
-    gameOverController: {
-      maybeShowGameOverToastFromMeta: vi.fn(),
-      applyRematchRequest: vi.fn(),
-      allPlayersRequestedRematch: vi.fn().mockReturnValue(false),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      setGameOverOverlayDismissed: vi.fn(),
-      renderGameOverUi: vi.fn()
-    },
-    dictionaryController: {
-      ensureLanguage: vi.fn().mockResolvedValue(undefined),
-      downloadRuStrict: vi.fn().mockResolvedValue(undefined),
-      refreshDictStatus: vi.fn(),
-      downloadLanguage: vi.fn()
-    },
-    networkController: {
-      setMode: vi.fn(),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      send: vi.fn(),
-      getConnection: vi.fn(),
-      setOnMessage: vi.fn(),
-      setOnOpen: vi.fn(),
-      setOnClose: vi.fn(),
-      setOnError: vi.fn(),
-      setOnConnectionStateChange: vi.fn(),
-      buildHostOffer: vi.fn(),
-      buildClientAnswer: vi.fn(),
-      applyHostAnswer: vi.fn(),
-      setupAutoBuildClientAnswer: vi.fn(),
-      setupAutoApplyHostAnswer: vi.fn(),
-      triggerReconnect: vi.fn()
-    },
-    toastManager: {
-      showToast: vi.fn()
-    },
-    qrScanner: {
-      scanInto: vi.fn()
-    },
-    blankTileSelector: {
-      selectBlankLetter: vi.fn()
-    },
-    endgameScanController: {
-      resetState: vi.fn(),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setOnGameEnd: vi.fn()
-    }
-  } as unknown as Controllers;
-}
+  function makeFakeHostMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
+    return {
+      mode: 'host',
+      language: 'en',
+      isHost: true,
+      gameStartAt: Date.now(),
+      localPlayerId: 'host',
+      remotePlayerId: 'client',
+      sessionId: 'test-session',
+      ...overrides
+    };
+  }
 
 function makeMockUiElements(): UiElements {
   return {
@@ -234,6 +123,7 @@ function makeMockApp(
     uiElements: makeMockUiElements(),
     additional: {} as AdditionalElements,
     appendLog: vi.fn(),
+    showToast: vi.fn(),
     renderAll: vi.fn(),
     sendSync: vi.fn(),
     checkAndHandleGameEnd: vi.fn(),
@@ -260,7 +150,7 @@ beforeEach(() => {
   handleMessage = createMessageHandler(app, restartForRematch);
 });
 
-describe('createMessageHandler', () => {
+  describe('createMessageHandler', () => {
   describe('invalid messages', () => {
     it('ignores null', async () => {
       await handleMessage(null);
@@ -739,9 +629,13 @@ describe('createMessageHandler', () => {
     });
   });
 
-  describe('PLAYER_READY', () => {
-    it('calls maybeScheduleGameStartFromReady and sends sync', async () => {
-      app.state.meta = makeFakeHostMeta({ readyState: {} });
+    describe('PLAYER_READY', () => {
+      beforeEach(() => {
+        vi.mocked(app.controllers.readyGate.isReadyGateEnabled).mockReturnValue(true);
+      });
+
+      it('calls maybeScheduleGameStartFromReady and sends sync', async () => {
+        app.state.meta = makeFakeHostMeta({ readyState: {} });
 
       await handleMessage({
         type: 'PLAYER_READY',

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ScrabbleGame } from './game';
-import type { Placement } from './types';
+import type { GameState, Placement } from './types';
 
 // Mock crypto.randomUUID for deterministic testing
 let uuidCounter = 0;
@@ -17,6 +17,11 @@ afterAll(() => {
 describe('ScrabbleGame', () => {
     let game: ScrabbleGame;
     const mockCheckWord = vi.fn().mockResolvedValue(true);
+    const withState = (update: (state: GameState) => void): void => {
+        const state = structuredClone(game.getState()) as GameState;
+        update(state);
+        game.resume(state);
+    };
 
     beforeEach(() => {
         uuidCounter = 0;
@@ -153,9 +158,11 @@ describe('ScrabbleGame', () => {
 
         it('rejects move when no valid word is formed', async () => {
             game.start('en', ['p1']);
-            const state = game.getState();
-            state.racks['p1'][0] = { ...state.racks['p1'][0], letter: '' };
+            withState((nextState) => {
+                nextState.racks['p1'][0] = { ...nextState.racks['p1'][0], letter: '' };
+            });
 
+            const state = game.getState();
             const result = await game.placeMove('p1', [{ x: 7, y: 7, tile: state.racks['p1'][0] }], mockCheckWord);
             expect(result.success).toBe(false);
             expect(result.message).toBe('No valid word formed');
@@ -164,12 +171,13 @@ describe('ScrabbleGame', () => {
 
     it('accepts valid first move', async () => {
         game.start('en', ['p1']);
+        withState((state) => {
+            // Force known letters into rack for predictable word
+            state.racks['p1'][0] = { id: 't1', letter: 'H', value: 4 };
+            state.racks['p1'][1] = { id: 't2', letter: 'I', value: 1 };
+        });
         const state = game.getState();
         const rack = state.racks['p1'];
-
-        // Force known letters into rack for predictable word
-        rack[0] = { id: 't1', letter: 'H', value: 4 };
-        rack[1] = { id: 't2', letter: 'I', value: 1 };
 
         const placements: Placement[] = [
             { x: 7, y: 7, tile: rack[0] },
@@ -240,14 +248,15 @@ describe('ScrabbleGame', () => {
 
     it('ends game after 4 consecutive passes (2 per player) and applies end-game scoring', () => {
         game.start('en', ['p1', 'p2']);
-        const state = game.getState();
-        state.racks['p1'] = [
-            { id: 'p1a', letter: 'A', value: 1 },
-            { id: 'p1b', letter: 'B', value: 3 }
-        ];
-        state.racks['p2'] = [
-            { id: 'p2c', letter: 'C', value: 3 }
-        ];
+        withState((state) => {
+            state.racks['p1'] = [
+                { id: 'p1a', letter: 'A', value: 1 },
+                { id: 'p1b', letter: 'B', value: 3 }
+            ];
+            state.racks['p2'] = [
+                { id: 'p2c', letter: 'C', value: 3 }
+            ];
+        });
 
         expect(game.passTurn('p1').success).toBe(true);
         expect(game.passTurn('p2').success).toBe(true);
@@ -282,10 +291,12 @@ describe('ScrabbleGame', () => {
         game.start('en', ['p1', 'p2']);
 
         // 1) MOVE by p1: force predictable word "HI"
+        withState((state1) => {
+            state1.racks['p1'][0] = { id: 't1', letter: 'H', value: 4 };
+            state1.racks['p1'][1] = { id: 't2', letter: 'I', value: 1 };
+        });
         const state1 = game.getState();
         const rack1 = state1.racks['p1'];
-        rack1[0] = { id: 't1', letter: 'H', value: 4 };
-        rack1[1] = { id: 't2', letter: 'I', value: 1 };
         const placements1: Placement[] = [
             { x: 7, y: 7, tile: rack1[0] },
             { x: 8, y: 7, tile: rack1[1] }
@@ -315,6 +326,11 @@ describe('ScrabbleGame', () => {
         expect(afterPass.history[1].moveNumber).toBe(2);
 
         // 3) EXCHANGE by p1
+        withState((state) => {
+            state.racks['p1'][0] = { id: 't3', letter: 'A', value: 1 };
+            state.racks['p1'][1] = { id: 't4', letter: 'B', value: 3 };
+            state.racks['p1'][2] = { id: 't5', letter: 'C', value: 3 };
+        });
         const state3 = game.getState();
         const rack3 = state3.racks['p1'];
         const exchangeIds = [rack3[0].id, rack3[1].id, rack3[2].id];
@@ -355,8 +371,9 @@ describe('ScrabbleGame', () => {
 
     it('detects game end when bag is empty and no players have valid moves', async () => {
         game.start('en', ['p1', 'p2']);
-        const state = game.getState();
-        state.bag = [];
+        withState((state) => {
+            state.bag = [];
+        });
 
         const checker: WordChecker = async () => false;
         checker.getAllWords = () => new Set<string>();
@@ -366,19 +383,62 @@ describe('ScrabbleGame', () => {
         expect(ended.reason).toBe('no_moves_bag_empty');
     });
 
+    describe('exchangeTiles edge cases', () => {
+        it('rejects empty tileIds', () => {
+            game.start('en', ['p1', 'p2']);
+            const result = game.exchangeTiles('p1', []);
+
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Choose tiles to exchange');
+        });
+
+        it('rejects tiles not in rack', () => {
+            game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.racks['p1'] = [{ id: 'rack-1', letter: 'A', value: 1 }];
+            });
+            const rack = game.getState().racks['p1'];
+            const result = game.exchangeTiles('p1', ['missing-id', rack[0].id]);
+
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Tile not in rack');
+        });
+
+        it('fails when bag has fewer than 7 tiles', () => {
+            game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.bag = [
+                    { id: 'b1', letter: 'A', value: 1 },
+                    { id: 'b2', letter: 'B', value: 3 },
+                    { id: 'b3', letter: 'C', value: 3 },
+                    { id: 'b4', letter: 'D', value: 2 },
+                    { id: 'b5', letter: 'E', value: 1 },
+                    { id: 'b6', letter: 'F', value: 4 }
+                ];
+            });
+            const rack = game.getState().racks['p1'];
+            const result = game.exchangeTiles('p1', [rack[0].id]);
+
+            expect(result.success).toBe(false);
+            expect(result.message).toBe('Not enough tiles in bag to exchange (need at least 7)');
+        });
+    });
+
     describe('exchangeTiles bag minimum (7 tiles)', () => {
         it('succeeds when bag has exactly 7 tiles', () => {
             game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.bag = [
+                    { id: 'b1', letter: 'A', value: 1 },
+                    { id: 'b2', letter: 'B', value: 3 },
+                    { id: 'b3', letter: 'C', value: 3 },
+                    { id: 'b4', letter: 'D', value: 2 },
+                    { id: 'b5', letter: 'E', value: 1 },
+                    { id: 'b6', letter: 'F', value: 4 },
+                    { id: 'b7', letter: 'G', value: 2 }
+                ];
+            });
             const state = game.getState();
-            state.bag = [
-                { id: 'b1', letter: 'A', value: 1 },
-                { id: 'b2', letter: 'B', value: 3 },
-                { id: 'b3', letter: 'C', value: 3 },
-                { id: 'b4', letter: 'D', value: 2 },
-                { id: 'b5', letter: 'E', value: 1 },
-                { id: 'b6', letter: 'F', value: 4 },
-                { id: 'b7', letter: 'G', value: 2 }
-            ];
             const rack = state.racks['p1'];
             const result = game.exchangeTiles('p1', [rack[0].id]);
             expect(result.success).toBe(true);
@@ -386,15 +446,17 @@ describe('ScrabbleGame', () => {
 
         it('fails when bag has 6 tiles', () => {
             game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.bag = [
+                    { id: 'b1', letter: 'A', value: 1 },
+                    { id: 'b2', letter: 'B', value: 3 },
+                    { id: 'b3', letter: 'C', value: 3 },
+                    { id: 'b4', letter: 'D', value: 2 },
+                    { id: 'b5', letter: 'E', value: 1 },
+                    { id: 'b6', letter: 'F', value: 4 }
+                ];
+            });
             const state = game.getState();
-            state.bag = [
-                { id: 'b1', letter: 'A', value: 1 },
-                { id: 'b2', letter: 'B', value: 3 },
-                { id: 'b3', letter: 'C', value: 3 },
-                { id: 'b4', letter: 'D', value: 2 },
-                { id: 'b5', letter: 'E', value: 1 },
-                { id: 'b6', letter: 'F', value: 4 }
-            ];
             const rack = state.racks['p1'];
             const result = game.exchangeTiles('p1', [rack[0].id]);
             expect(result.success).toBe(false);
@@ -403,8 +465,10 @@ describe('ScrabbleGame', () => {
 
         it('fails when bag has 0 tiles', () => {
             game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.bag = [];
+            });
             const state = game.getState();
-            state.bag = [];
             const rack = state.racks['p1'];
             const result = game.exchangeTiles('p1', [rack[0].id]);
             expect(result.success).toBe(false);
@@ -415,16 +479,18 @@ describe('ScrabbleGame', () => {
     describe('blank tile value validation in placeMove', () => {
         it('rejects blank tile with value > 0', async () => {
             game.start('en', ['p1', 'p2']);
-            const state = game.getState();
-            state.racks['p1'] = [
-                { id: 'b1', letter: ' ', value: 0, blank: true },
-                { id: 't1', letter: 'A', value: 1 },
-                { id: 't2', letter: 'B', value: 3 },
-                { id: 't3', letter: 'C', value: 3 },
-                { id: 't4', letter: 'D', value: 2 },
-                { id: 't5', letter: 'E', value: 1 },
-                { id: 't6', letter: 'F', value: 4 }
-            ];
+            withState((state) => {
+                state.racks['p1'] = [
+                    { id: 'b1', letter: ' ', value: 0, blank: true },
+                    { id: 't1', letter: 'A', value: 1 },
+                    { id: 't2', letter: 'B', value: 3 },
+                    { id: 't3', letter: 'C', value: 3 },
+                    { id: 't4', letter: 'D', value: 2 },
+                    { id: 't5', letter: 'E', value: 1 },
+                    { id: 't6', letter: 'F', value: 4 }
+                ];
+            });
+            void game.getState();
 
             const placements: Placement[] = [
                 { x: 7, y: 7, tile: { id: 'b1', letter: 'Z', value: 10, blank: true } }
@@ -437,16 +503,18 @@ describe('ScrabbleGame', () => {
 
         it('accepts blank tile with value = 0', async () => {
             game.start('en', ['p1', 'p2']);
-            const state = game.getState();
-            state.racks['p1'] = [
-                { id: 'b1', letter: ' ', value: 0, blank: true },
-                { id: 't1', letter: 'A', value: 1 },
-                { id: 't2', letter: 'B', value: 3 },
-                { id: 't3', letter: 'C', value: 3 },
-                { id: 't4', letter: 'D', value: 2 },
-                { id: 't5', letter: 'E', value: 1 },
-                { id: 't6', letter: 'F', value: 4 }
-            ];
+            withState((state) => {
+                state.racks['p1'] = [
+                    { id: 'b1', letter: ' ', value: 0, blank: true },
+                    { id: 't1', letter: 'A', value: 1 },
+                    { id: 't2', letter: 'B', value: 3 },
+                    { id: 't3', letter: 'C', value: 3 },
+                    { id: 't4', letter: 'D', value: 2 },
+                    { id: 't5', letter: 'E', value: 1 },
+                    { id: 't6', letter: 'F', value: 4 }
+                ];
+            });
+            void game.getState();
 
             const placements: Placement[] = [
                 { x: 7, y: 7, tile: { id: 'b1', letter: 'A', value: 0, blank: true } },
@@ -461,12 +529,14 @@ describe('ScrabbleGame', () => {
     describe('applyEndGameScoring', () => {
         it('subtracts rack tile values from each player score', () => {
             game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                // Manually set known scores and racks
+                state.scores['p1'] = 30;
+                state.scores['p2'] = 20;
+                state.racks['p1'] = [{ id: 'a', letter: 'A', value: 1 }, { id: 'b', letter: 'B', value: 3 }];
+                state.racks['p2'] = [{ id: 'c', letter: 'Q', value: 10 }];
+            });
             const state = game.getState();
-            // Manually set known scores and racks
-            state.scores['p1'] = 30;
-            state.scores['p2'] = 20;
-            state.racks['p1'] = [{ id: 'a', letter: 'A', value: 1 }, { id: 'b', letter: 'B', value: 3 }];
-            state.racks['p2'] = [{ id: 'c', letter: 'Q', value: 10 }];
 
             game.applyEndGameScoring();
 
@@ -476,12 +546,14 @@ describe('ScrabbleGame', () => {
 
         it('can produce negative scores', () => {
             game.start('en', ['p1']);
+            withState((state) => {
+                state.scores['p1'] = 5;
+                state.racks['p1'] = [
+                    { id: 'a', letter: 'Q', value: 10 },
+                    { id: 'b', letter: 'Z', value: 10 }
+                ];
+            });
             const state = game.getState();
-            state.scores['p1'] = 5;
-            state.racks['p1'] = [
-                { id: 'a', letter: 'Q', value: 10 },
-                { id: 'b', letter: 'Z', value: 10 }
-            ];
 
             game.applyEndGameScoring();
 
@@ -490,11 +562,13 @@ describe('ScrabbleGame', () => {
 
         it('empty rack gets going-out bonus', () => {
             game.start('en', ['p1', 'p2']);
+            withState((state) => {
+                state.scores['p1'] = 15;
+                state.scores['p2'] = 10;
+                state.racks['p1'] = [];
+                state.racks['p2'] = [{ id: 'a', letter: 'E', value: 1 }];
+            });
             const state = game.getState();
-            state.scores['p1'] = 15;
-            state.scores['p2'] = 10;
-            state.racks['p1'] = [];
-            state.racks['p2'] = [{ id: 'a', letter: 'E', value: 1 }];
 
             game.applyEndGameScoring();
 

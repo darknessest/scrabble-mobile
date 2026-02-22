@@ -19,15 +19,20 @@ export class GameController {
     private lastAutoPassToken: string | null = null;
     private autoPassInProgress = false;
     private appendLog: (msg: string) => void;
+    private showToast: (msg: string, variant?: 'info' | 'danger', ms?: number) => void;
     private onValidationUpdate: () => void = () => { };
     private onGameEnd: () => void = () => { };
     private onPersist: () => Promise<void> = async () => { };
     private onSync: () => void = () => { };
     private onRenderAll: () => void = () => { };
 
-    constructor(appendLog: (msg: string) => void) {
+    constructor(
+        appendLog: (msg: string) => void,
+        showToast: (msg: string, variant?: 'info' | 'danger', ms?: number) => void = () => { }
+    ) {
         this.game = new ScrabbleGame();
         this.appendLog = appendLog;
+        this.showToast = showToast;
     }
 
     setMeta(meta: SessionMeta | null): void {
@@ -225,7 +230,7 @@ export class GameController {
                 meta.minWordLength
             );
             if (!result.success) {
-                this.appendLog(result.message ?? 'Invalid move');
+                this.reportError(result.message ?? 'Invalid move');
                 return false;
             }
             this.currentState = this.game.getState();
@@ -253,7 +258,7 @@ export class GameController {
             meta.minWordLength
         );
         if (!result.success) {
-            this.appendLog(result.message ?? 'Invalid move');
+            this.reportError(result.message ?? 'Invalid move');
             return false;
         }
         this.currentState = this.game.getState();
@@ -275,7 +280,7 @@ export class GameController {
             const pid = actingPlayerId ?? meta.localPlayerId;
             const result = this.game.passTurn(pid);
             if (!result.success) {
-                this.appendLog(result.message ?? 'Cannot pass');
+                this.reportError(result.message ?? 'Cannot pass');
                 return false;
             }
             this.currentState = this.game.getState();
@@ -298,7 +303,7 @@ export class GameController {
             const pid = actingPlayerId ?? meta.localPlayerId;
             const result = this.game.exchangeTiles(pid, tileIds);
             if (!result.success) {
-                this.appendLog(result.message ?? 'Exchange rejected');
+                this.reportError(result.message ?? 'Exchange rejected');
                 return false;
             }
             this.currentState = this.game.getState();
@@ -372,6 +377,11 @@ export class GameController {
         this.onGameEnd();
     }
 
+    private reportError(message: string): void {
+        this.appendLog(message);
+        this.showToast(message, 'danger');
+    }
+
     buildWordChecker(): WordChecker {
         const meta = this.meta;
         const variant = meta?.russianDictionaryVariant;
@@ -401,7 +411,7 @@ export class GameController {
         this.onRenderAll();
 
         const preview = new ScrabbleGame();
-        preview.resume(structuredClone(state));
+        preview.resume(buildValidationState(state));
         const variant = meta.russianDictionaryVariant;
         const result = await preview.placeMove(
             meta.localPlayerId,
@@ -427,4 +437,32 @@ export class GameController {
         this.rackOrderSessionId = state.sessionId;
         return state;
     }
+}
+
+function buildValidationState(state: GameState): GameState {
+    const board = state.board.map((row) => row.map((cell) => ({ tile: cell.tile })));
+    const racks: Record<string, Tile[]> = {};
+    Object.entries(state.racks).forEach(([playerId, rack]) => {
+        racks[playerId] = rack.map((tile) => tile);
+    });
+
+    return {
+        board,
+        bag: [...state.bag],
+        racks,
+        scores: { ...state.scores },
+        currentPlayer: state.currentPlayer,
+        players: [...state.players],
+        language: state.language,
+        moveNumber: state.moveNumber,
+        lastMove: state.lastMove
+            ? {
+                moveNumber: state.lastMove.moveNumber,
+                playerId: state.lastMove.playerId,
+                placed: state.lastMove.placed.map((p) => ({ x: p.x, y: p.y }))
+            }
+            : null,
+        history: [],
+        sessionId: state.sessionId
+    };
 }

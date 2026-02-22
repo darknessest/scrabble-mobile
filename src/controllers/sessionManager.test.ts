@@ -5,6 +5,7 @@ import type { GameState } from '../core/types';
 import type { Controllers } from './controllerWiring';
 import type { UiElements } from '../ui/uiRenderer';
 import type { AdditionalElements } from '../ui/domElements';
+import { makeMockControllers } from './testFixtures';
 
 vi.mock('./controllerBus', () => ({
   propagateMeta: vi.fn()
@@ -31,120 +32,6 @@ function makeFakeGameState(overrides: Partial<GameState> = {}): GameState {
     history: [],
     ...overrides
   } as unknown as GameState;
-}
-
-function makeMockControllers(): Controllers {
-  const fakeState = makeFakeGameState();
-  return {
-    gameController: {
-      start: vi.fn().mockReturnValue(fakeState),
-      resume: vi.fn(),
-      getState: vi.fn().mockReturnValue(fakeState),
-      resetForRematch: vi.fn().mockReturnValue(makeFakeGameState({ sessionId: 'rematch-session' })),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      getPlacements: vi.fn().mockReturnValue([]),
-      clearPlacements: vi.fn(),
-      getSelectedTileId: vi.fn().mockReturnValue(null),
-      setSelectedTileId: vi.fn(),
-      getRemoteDraft: vi.fn(),
-      getRackOrder: vi.fn().mockReturnValue([]),
-      getRackOrderSessionId: vi.fn(),
-      getValidationStatus: vi.fn().mockReturnValue('idle'),
-      getValidationMessage: vi.fn(),
-      setOnValidationUpdate: vi.fn(),
-      setOnGameEnd: vi.fn(),
-      setOnPersist: vi.fn(),
-      setOnSync: vi.fn(),
-      setOnRenderAll: vi.fn(),
-      syncLocalRackOrder: vi.fn(),
-      shuffleRack: vi.fn(),
-      submitMove: vi.fn(),
-      submitRemoteMove: vi.fn(),
-      submitPass: vi.fn(),
-      submitExchange: vi.fn(),
-      setRemoteDraft: vi.fn(),
-      updateValidation: vi.fn(),
-      buildWordChecker: vi.fn(),
-      placeSelectedTileAt: vi.fn(),
-      removePlacementAt: vi.fn(),
-      maybeAutoPassOnTimeout: vi.fn(),
-      getGame: vi.fn()
-    },
-    networkController: {
-      setMode: vi.fn(),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      send: vi.fn(),
-      getConnection: vi.fn().mockReturnValue(null),
-      setOnMessage: vi.fn(),
-      setOnOpen: vi.fn(),
-      setOnClose: vi.fn(),
-      setOnError: vi.fn(),
-      setOnConnectionStateChange: vi.fn(),
-      buildHostOffer: vi.fn().mockResolvedValue(undefined),
-      buildClientAnswer: vi.fn(),
-      applyHostAnswer: vi.fn(),
-      setupAutoBuildClientAnswer: vi.fn(),
-      setupAutoApplyHostAnswer: vi.fn(),
-      triggerReconnect: vi.fn().mockResolvedValue(undefined)
-    },
-    timerController: {
-      startTimerTicker: vi.fn(),
-      stopTimerTicker: vi.fn(),
-      resetTurnTimer: vi.fn(),
-      setMeta: vi.fn(),
-      setConnection: vi.fn(),
-      setOnTimeout: vi.fn()
-    },
-    readyGate: {
-      isReadyGateEnabled: vi.fn().mockReturnValue(false),
-      maybeScheduleGameStartFromReady: vi.fn().mockResolvedValue(undefined),
-      isPreGameLocked: vi.fn().mockReturnValue(false),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      setOnUnlock: vi.fn()
-    },
-    storageController: {
-      persistSnapshot: vi.fn().mockResolvedValue(undefined),
-      checkSavedSnapshot: vi.fn(),
-      clearSavedSnapshot: vi.fn(),
-      getPendingSnapshot: vi.fn().mockReturnValue(null)
-    },
-    gameOverController: {
-      maybeShowGameOverToastFromMeta: vi.fn(),
-      applyRematchRequest: vi.fn(),
-      allPlayersRequestedRematch: vi.fn().mockReturnValue(false),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setLabels: vi.fn(),
-      setGameOverOverlayDismissed: vi.fn(),
-      renderGameOverUi: vi.fn()
-    },
-    dictionaryController: {
-      ensureLanguage: vi.fn().mockResolvedValue(undefined),
-      downloadRuStrict: vi.fn().mockResolvedValue(undefined),
-      refreshDictStatus: vi.fn(),
-      downloadLanguage: vi.fn()
-    },
-    endgameScanController: {
-      resetState: vi.fn(),
-      setMeta: vi.fn(),
-      setCurrentState: vi.fn(),
-      setOnGameEnd: vi.fn()
-    },
-    toastManager: {
-      showToast: vi.fn()
-    },
-    qrScanner: {
-      scanInto: vi.fn()
-    },
-    blankTileSelector: {
-      selectBlankLetter: vi.fn()
-    }
-  } as unknown as Controllers;
 }
 
 function makeMockUiElements(): UiElements {
@@ -220,6 +107,7 @@ function makeMockApp(modeOverride?: 'solo' | 'host' | 'client', controllers?: Co
     uiElements: makeMockUiElements(),
     additional: {} as AdditionalElements,
     appendLog: vi.fn(),
+    showToast: vi.fn(),
     renderAll: vi.fn(),
     sendSync: vi.fn(),
     checkAndHandleGameEnd: vi.fn(),
