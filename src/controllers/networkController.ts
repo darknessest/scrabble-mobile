@@ -5,6 +5,13 @@ import { createClient, createHost } from '../network/p2p';
 import { toQrDataUrl } from '../network/qr';
 import { debounce, looksLikeEncodedSdp } from '../utils/appUtils';
 import { nextSequence } from '../utils/messageSequence';
+import { getLogSince } from '../storage/indexedDb';
+
+type PendingMessageState = {
+    message: ActionMessage;
+    sendAttempts: number;
+    retryTimer: ReturnType<typeof setTimeout> | null;
+};
 
 export class NetworkController {
     private connection: P2PConnection | null = null;
@@ -32,6 +39,11 @@ export class NetworkController {
     private disconnectTimerState: { deadline: number; remaining: number } | null = null;
     private hostLanguageSelect: HTMLSelectElement | null = null;
     private hostEnsureLanguage: ((lang: Language) => Promise<void>) | null = null;
+    private readonly retryBackoffMs = [1000, 2000, 4000, 8000, 16000];
+    private readonly maxRetryAttempts = 5;
+    private isChannelConnected = true;
+    private pendingOutgoingMessages = new Map<number, PendingMessageState>();
+    private sendBuffer: ActionMessage[] = [];
 
     constructor(
         p2pStatus: HTMLSpanElement,
@@ -138,13 +150,17 @@ export class NetworkController {
         return {
             onMessage: (data: unknown) => this.onMessageCallback(data),
             onOpen: () => {
+                this.isChannelConnected = true;
                 this.p2pStatus.textContent = 'Connected';
                 this.p2pStatus.className = 'pill active';
                 this.appendLog('Data channel open.');
+                this.flushPendingRetries();
+                this.flushSendBuffer();
                 this.hideDisconnectOverlay();
                 this.onOpenCallback();
             },
             onClose: () => {
+                this.isChannelConnected = false;
                 this.handleDisconnect();
                 this.onCloseCallback();
             },
@@ -154,7 +170,12 @@ export class NetworkController {
             },
             onLog: (msg: string) => this.appendLog(msg),
             onConnectionStateChange: (state) => {
-                if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            if (state === 'connected') {
+                this.isChannelConnected = true;
+                this.flushPendingRetries();
+                this.flushSendBuffer();
+            } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+                    this.isChannelConnected = false;
                     this.handleDisconnect();
                 }
                 this.onConnectionStateChangeCallback(state);
@@ -238,7 +259,133 @@ export class NetworkController {
 
     send(data: ActionMessage): void {
         const withSequence = this.decorateWithSequenceMetadata(data);
-        this.connection?.send(withSequence);
+
+        if (!this.isChannelReadyForSend()) {
+            this.bufferForReconnect(withSequence);
+            return;
+        }
+
+        this.sendWithRetry(withSequence);
+    }
+
+    handleAck(ack: number): void {
+        const entry = this.pendingOutgoingMessages.get(ack);
+        if (!entry) {
+            return;
+        }
+
+        this.clearRetryTimer(entry);
+        this.pendingOutgoingMessages.delete(ack);
+    }
+
+    requestSync(): void {
+        const meta = this.meta;
+        if (!meta?.sessionId) {
+            this.send({ type: 'REQUEST_SYNC' });
+            return;
+        }
+
+        void (async () => {
+            try {
+                const operations = await getLogSince(meta.sessionId, -1);
+                const sinceSeq = operations.length > 0 ? operations[operations.length - 1].seq : -1;
+                this.send({ type: 'REQUEST_SYNC', sinceSeq });
+            } catch (err) {
+                this.appendLog(`Unable to read local operation log for sync: ${String(err)}`);
+                this.send({ type: 'REQUEST_SYNC' });
+            }
+        })();
+    }
+
+    private isTrackable(data: ActionMessage): boolean {
+        if (data.type === 'MSG_ACK' || data.type === 'MSG_NACK') {
+            return false;
+        }
+
+        return typeof data.seq === 'number' && data.seq >= 1;
+    }
+
+    private isChannelReadyForSend(): boolean {
+        return Boolean(this.connection?.dataChannelReady) && this.isChannelConnected;
+    }
+
+    private bufferForReconnect(data: ActionMessage): void {
+        if (!this.isTrackable(data)) {
+            return;
+        }
+
+        this.sendBuffer.push(data);
+    }
+
+    private sendWithRetry(data: ActionMessage): void {
+        if (!this.isTrackable(data)) {
+            this.connection?.send(data);
+            return;
+        }
+
+        const seq = data.seq;
+        if (!seq) {
+            return;
+        }
+
+        const entry: PendingMessageState = {
+            message: data,
+            sendAttempts: 0,
+            retryTimer: null
+        };
+        this.pendingOutgoingMessages.set(seq, entry);
+        this.attemptSend(seq, entry);
+    }
+
+    private attemptSend(seq: number, entry: PendingMessageState): void {
+        this.clearRetryTimer(entry);
+
+        if (!this.isChannelReadyForSend()) {
+            return;
+        }
+
+        this.connection?.send(entry.message);
+        entry.sendAttempts += 1;
+
+        if (entry.sendAttempts > this.maxRetryAttempts) {
+            this.pendingOutgoingMessages.delete(seq);
+            this.appendLog(`Giving up on message seq=${seq} after ${this.maxRetryAttempts} retries.`);
+            return;
+        }
+
+        const delayMs = this.retryBackoffMs[entry.sendAttempts - 1];
+        if (delayMs === undefined) {
+            this.pendingOutgoingMessages.delete(seq);
+            return;
+        }
+
+        entry.retryTimer = setTimeout(() => {
+            this.attemptSend(seq, entry);
+        }, delayMs);
+    }
+
+    private clearRetryTimer(entry: PendingMessageState): void {
+        if (!entry.retryTimer) return;
+        clearTimeout(entry.retryTimer);
+        entry.retryTimer = null;
+    }
+
+    private flushSendBuffer(): void {
+        if (!this.isChannelReadyForSend()) return;
+
+        if (this.sendBuffer.length === 0) return;
+
+        const toSend = [...this.sendBuffer];
+        this.sendBuffer = [];
+        for (const item of toSend) {
+            this.sendWithRetry(item);
+        }
+    }
+
+    private flushPendingRetries(): void {
+        for (const [seq, entry] of this.pendingOutgoingMessages.entries()) {
+            this.attemptSend(seq, entry);
+        }
     }
 
     private showDisconnectOverlay(message?: string): void {

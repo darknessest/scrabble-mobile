@@ -328,11 +328,114 @@ describe('NetworkController.send', () => {
     expect(payload.ack).toBe(41);
   });
 
-  it('is a no-op when there is no connection', () => {
-    // No setupHostWithConnection — connection is null
-    expect(() => {
-      nc.send({ type: 'REQUEST_SYNC' });
-    }).not.toThrow();
+    it('is a no-op when there is no connection', () => {
+      // No setupHostWithConnection — connection is null
+      expect(() => {
+        nc.send({ type: 'REQUEST_SYNC' });
+      }).not.toThrow();
+    });
+
+  it('requestSync sends a REQUEST_SYNC message', async () => {
+    await setupHostWithConnection();
+
+    nc.requestSync();
+
+    await vi.waitFor(() => {
+      expect(mockConn.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'REQUEST_SYNC' }));
+    });
+  });
+
+  it('tracks outbound sequenced messages as pending and clears on ACK', async () => {
+    await setupHostWithConnection();
+
+    nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+
+    const tracked = nc['pendingOutgoingMessages'].get(1);
+    expect(tracked).toBeDefined();
+
+    nc.handleAck(1);
+    expect(nc['pendingOutgoingMessages'].has(1)).toBe(false);
+  });
+
+  it('retries unacked messages with exponential backoff and gives up after max retries', async () => {
+    vi.useFakeTimers();
+    try {
+      await setupHostWithConnection();
+      vi.mocked(mockConn.send).mockClear();
+
+      nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+      expect(mockConn.send).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1000);
+      expect(mockConn.send).toHaveBeenCalledTimes(2);
+
+      vi.advanceTimersByTime(2000);
+      expect(mockConn.send).toHaveBeenCalledTimes(3);
+
+      vi.advanceTimersByTime(4000);
+      expect(mockConn.send).toHaveBeenCalledTimes(4);
+
+      vi.advanceTimersByTime(8000);
+      expect(mockConn.send).toHaveBeenCalledTimes(5);
+
+      vi.advanceTimersByTime(16000);
+      expect(mockConn.send).toHaveBeenCalledTimes(6);
+
+      vi.advanceTimersByTime(1);
+      expect(mockConn.send).toHaveBeenCalledTimes(6);
+
+      expect(appendLog).toHaveBeenCalledWith('Giving up on message seq=1 after 5 retries.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying once ACK arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      await setupHostWithConnection();
+      vi.mocked(mockConn.send).mockClear();
+
+      nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+      expect(mockConn.send).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(500);
+      nc.handleAck(1);
+      vi.advanceTimersByTime(20_000);
+
+      expect(mockConn.send).toHaveBeenCalledTimes(1);
+      expect(nc['pendingOutgoingMessages'].has(1)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('buffers outgoing trackable messages while disconnected and flushes after reconnect', async () => {
+    nc.setMode('host');
+    nc.setMeta(makeFakeMeta());
+    nc.setCurrentState(makeFakeGameState());
+    await nc.buildHostOffer(makeLanguageSelect(), vi.fn().mockResolvedValue(undefined));
+
+    Object.defineProperty(mockConn, 'dataChannelReady', {
+      configurable: true,
+      get: () => false,
+    });
+    nc['isChannelConnected'] = false;
+
+    nc.send({ type: 'ACTION_PASS', playerId: 'host' });
+    expect(mockConn.send).not.toHaveBeenCalled();
+    expect(nc['sendBuffer']).toHaveLength(1);
+
+    Object.defineProperty(mockConn, 'dataChannelReady', {
+      configurable: true,
+      get: () => true,
+    });
+    nc['isChannelConnected'] = true;
+
+    capturedCallbacks.onOpen!();
+
+    expect(mockConn.send).toHaveBeenCalledTimes(1);
+    expect(nc['sendBuffer']).toHaveLength(0);
   });
 });
 
