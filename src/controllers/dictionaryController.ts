@@ -6,6 +6,7 @@ import {
     ensureDictionaryStrict,
     getDictionaryWordSet
 } from '../dictionary/dictionaryService';
+import { resolveMinWordLength } from '../utils/minWordLength';
 
 export class DictionaryController {
     private dictEnIcon: HTMLSpanElement;
@@ -92,7 +93,7 @@ export class DictionaryController {
             const strictStatus = await ensureDictionaryStrict();
             if (!strictStatus.available) return false;
             const norm = word.trim().toUpperCase();
-            const minLength = minLengthInput ? Math.max(1, Math.floor(Number(minLengthInput.value) || 2)) : 2;
+            const minLength = resolveMinWordLength(minLengthInput?.value);
             if (norm.length < minLength) return false;
             const cache = await getDictionaryWordSet('ru-strict');
             return cache?.has(norm) ?? false;
@@ -100,7 +101,7 @@ export class DictionaryController {
             const status = await ensureDictionary(language);
             if (!status.available) return false;
             const norm = word.trim().toUpperCase();
-            const minLength = minLengthInput ? Math.max(1, Math.floor(Number(minLengthInput.value) || 2)) : 2;
+            const minLength = resolveMinWordLength(minLengthInput?.value);
             if (norm.length < minLength) return false;
             const cache = await getDictionaryWordSet(language);
             return cache?.has(norm) ?? false;

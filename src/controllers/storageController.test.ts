@@ -64,7 +64,7 @@ beforeEach(() => {
   resumeBtn = makeBtn();
   clearBtn = makeBtn();
   note = makeP();
-  ctrl = new StorageController(resumeBtn, clearBtn, note, vi.fn());
+  ctrl = new StorageController(resumeBtn, clearBtn, note);
 });
 
 describe('persistSnapshot', () => {
@@ -76,7 +76,12 @@ describe('persistSnapshot', () => {
 
     await ctrl.persistSnapshot(state, meta, labels);
 
-    expect(mockedSave).toHaveBeenCalledWith('last-session', { state, meta, labels });
+    expect(mockedSave).toHaveBeenCalledWith('last-session', {
+      version: 1,
+      state,
+      meta,
+      labels
+    });
     expect(resumeBtn.disabled).toBe(false);
     expect(clearBtn.disabled).toBe(false);
     expect(note.textContent).toContain('Alice');

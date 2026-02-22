@@ -6,6 +6,7 @@ import type { Controllers } from './controllerWiring';
 import type { UiElements } from '../ui/uiRenderer';
 import type { AdditionalElements } from '../ui/domElements';
 import { makeMockControllers } from './testFixtures';
+import { computeStateHash } from '../utils/syncState';
 
 vi.mock('./controllerBus', () => ({
   propagateMeta: vi.fn()
@@ -283,6 +284,39 @@ beforeEach(() => {
       expect(app.applyModeUIInternal).toHaveBeenCalled();
     });
 
+    it('recomputes stateHash when syncing', async () => {
+      const incomingState = makeFakeGameState();
+      const incomingMeta = makeFakeHostMeta({ stateHash: 'stale-hash' });
+      const expectedHash = computeStateHash(incomingState);
+
+      await handleMessage({
+        type: 'SYNC_STATE',
+        state: incomingState,
+        meta: incomingMeta,
+        labels: {}
+      });
+
+      expect(app.state.meta!.stateHash).toBe(expectedHash);
+      expect(app.state.meta!.stateHash).not.toBe('stale-hash');
+    });
+
+    it('initializes vectorClock when missing in incoming sync meta', async () => {
+      const incomingState = makeFakeGameState();
+      const incomingMeta: SessionMeta = {
+        ...makeFakeHostMeta(),
+        vectorClock: undefined
+      } as SessionMeta;
+
+      await handleMessage({
+        type: 'SYNC_STATE',
+        state: incomingState,
+        meta: incomingMeta,
+        labels: {}
+      });
+
+      expect(app.state.meta!.vectorClock).toEqual({});
+    });
+
     it('hides russian variant wrapper for non-ru language', async () => {
       const incomingMeta = makeFakeHostMeta({ language: 'en' });
       await handleMessage({
@@ -510,6 +544,64 @@ beforeEach(() => {
       });
 
       expect(app.checkAndHandleGameEnd).toHaveBeenCalled();
+    });
+
+    it('updates lastReceivedByPeer when handling a valid seq', async () => {
+      app.state.meta = makeFakeHostMeta({
+        remotePlayerId: 'client',
+        messageSequence: {
+          lastSentByPeer: {},
+          lastReceivedByPeer: {}
+        }
+      });
+
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'client',
+        seq: 7,
+      });
+
+      expect(app.controllers.gameController.submitPass).toHaveBeenCalledWith('client');
+      expect(app.state.meta!.messageSequence!.lastReceivedByPeer.client).toBe(7);
+    });
+
+    it('ignores duplicate or stale ACTION_PASS messages', async () => {
+      app.state.meta = makeFakeHostMeta({
+        remotePlayerId: 'client',
+        messageSequence: {
+          lastSentByPeer: {},
+          lastReceivedByPeer: { client: 10 }
+        }
+      });
+
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'client',
+        seq: 5,
+        ack: 1
+      });
+
+      expect(app.controllers.gameController.submitPass).not.toHaveBeenCalled();
+      expect(app.appendLog).toHaveBeenCalledWith(expect.stringContaining('Ignoring duplicate or stale message: type=ACTION_PASS'));
+    });
+
+    it('accepts wrapped sequence values near UINT32 max', async () => {
+      app.state.meta = makeFakeHostMeta({
+        remotePlayerId: 'client',
+        messageSequence: {
+          lastSentByPeer: {},
+          lastReceivedByPeer: { client: 0xFFFFFFFF }
+        }
+      });
+
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'client',
+        seq: 1,
+      });
+
+      expect(app.controllers.gameController.submitPass).toHaveBeenCalledWith('client');
+      expect(app.state.meta!.messageSequence!.lastReceivedByPeer.client).toBe(1);
     });
 
     it('calls finalizeGameEnd on success when game is over', async () => {

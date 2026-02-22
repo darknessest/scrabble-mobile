@@ -11,6 +11,11 @@ export function setupEvents(app: App, session: SessionManager): void {
     qrScanner, blankTileSelector
   } = controllers;
 
+  const showError = (message: string): void => {
+    app.appendLog(message);
+    app.showToast(message, 'danger');
+  };
+
   window.addEventListener('online', () => {
     renderNetworkStatus(uiElements.offlineStatus);
     void dictionaryController.refreshDictStatus();
@@ -61,11 +66,11 @@ export function setupEvents(app: App, session: SessionManager): void {
 
   uiElements.confirmMoveBtn.addEventListener('click', async () => {
     if (readyGate.isPreGameLocked()) {
-      app.appendLog('Waiting for both players to be ready.');
+      showError('Waiting for both players to be ready.');
       return;
     }
     if (gameController.getPlacements().length === 0) {
-      app.appendLog('Place tiles before confirming.');
+      showError('Place tiles before confirming.');
       return;
     }
 
@@ -103,7 +108,7 @@ export function setupEvents(app: App, session: SessionManager): void {
 
   uiElements.passBtn.addEventListener('click', async () => {
     if (readyGate.isPreGameLocked()) {
-      app.appendLog('Waiting for both players to be ready.');
+      showError('Waiting for both players to be ready.');
       return;
     }
 
@@ -139,7 +144,7 @@ export function setupEvents(app: App, session: SessionManager): void {
           ? [gameController.getSelectedTileId()!]
           : [];
     if (tileIds.length === 0) {
-      app.appendLog('Select a tile to exchange (tap a rack tile).');
+      showError('Select a tile to exchange (tap a rack tile).');
       return;
     }
 
@@ -285,7 +290,11 @@ export function setupEvents(app: App, session: SessionManager): void {
     if (!cell || !gameState || !meta) return;
     if (readyGate.isPreGameLocked()) return;
     if (meta.gameOver) return;
-    if (gameState.currentPlayer !== meta.localPlayerId) return;
+    if (gameState.currentPlayer !== meta.localPlayerId) {
+      const opponentName = state.labels[gameState.currentPlayer] ?? gameState.currentPlayer;
+      showError(`It is ${opponentName}'s turn`);
+      return;
+    }
     const x = Number(cell.dataset.x);
     const y = Number(cell.dataset.y);
     if (gameState.board[y][x].tile) return;

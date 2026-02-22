@@ -34,8 +34,8 @@ export function createControllers(
 ): Controllers {
   const toastManager = new ToastManager(additional.toastEl);
   const qrScanner = new QrScanner(appendLog);
-  const blankTileSelector = new BlankTileSelector(appendLog);
-  const gameController = new GameController(appendLog);
+  const blankTileSelector = new BlankTileSelector();
+  const gameController = new GameController(appendLog, toastManager.showToast.bind(toastManager));
   const networkController = new NetworkController(
     uiElements.p2pStatus,
     additional.offerText,
@@ -59,8 +59,7 @@ export function createControllers(
   const storageController = new StorageController(
     additional.resumeBtn,
     additional.clearSnapshotBtn,
-    additional.resumeNote,
-    appendLog
+    additional.resumeNote
   );
   const readyGate = new ReadyGate(
     uiElements.readyOverlay,

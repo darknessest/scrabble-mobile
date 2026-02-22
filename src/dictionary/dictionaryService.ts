@@ -10,27 +10,16 @@ export interface DictionaryStatus {
   words?: number;
 }
 
-export interface WordInfo {
-  word: string;
-  pos?: string[];
-  plural?: string;
-  base?: string;
-  forms?: string[];
-}
-
-// Cache for word sets (for fast lookup) and full entries (for metadata)
+// Cache for word sets (for fast lookup)
 // Using string keys to support both Language ('en', 'ru') and variants ('ru-strict')
 const memoryCache: Partial<Record<string, Set<string>>> = {};
-const entryCache: Partial<Record<string, Map<string, DictionaryEntry>>> = {};
 
 function processDictionaryEntries(key: DictionaryKey, entries: DictionaryEntry[]): number {
   const wordSet = new Set<string>();
-  const entryMap = new Map<string, DictionaryEntry>();
 
   for (const entry of entries) {
     const word = normalize(entry.word);
     wordSet.add(word);
-    entryMap.set(word, entry);
 
     if (entry.plural) wordSet.add(normalize(entry.plural));
     if (entry.base) wordSet.add(normalize(entry.base));
@@ -40,7 +29,6 @@ function processDictionaryEntries(key: DictionaryKey, entries: DictionaryEntry[]
   }
 
   memoryCache[key] = wordSet;
-  entryCache[key] = entryMap;
   return wordSet.size;
 }
 
@@ -301,43 +289,12 @@ export async function getDictionaryWordSet(language: DictionaryKey): Promise<Set
   return memoryCache[language] ?? null;
 }
 
-/**
- * Get detailed information about a word (POS, plural forms, etc.)
- */
-export async function getWordInfo(word: string, language: Language): Promise<WordInfo | null> {
-  await ensureDictionary(language);
-  const norm = normalize(word);
-
-  if (!memoryCache[language]?.has(norm)) {
-    return null;
-  }
-
-  const entryMap = entryCache[language];
-  if (entryMap) {
-    const entry = entryMap.get(norm);
-    if (entry) {
-      return {
-        word: entry.word,
-        pos: entry.pos,
-        plural: entry.plural,
-        base: entry.base,
-        forms: entry.forms,
-      };
-    }
-  }
-
-  // Fallback: return basic info if structured data not available
-  return { word: norm };
-}
-
 export function clearMemoryCache() {
   (['en', 'ru'] as Language[]).forEach((lang) => {
     delete memoryCache[lang];
-    delete entryCache[lang];
   });
   // Also clear strict version
   delete memoryCache['ru-strict'];
-  delete entryCache['ru-strict'];
 }
 
 /**
@@ -394,4 +351,3 @@ function extractWord(line: string): string | null {
   if (!cleaned) return null;
   return cleaned.toUpperCase();
 }
-

@@ -144,6 +144,7 @@ export function applyModeUI(
     modeTabs.querySelectorAll('button').forEach((b) => {
         const isActive = b.dataset.mode === mode;
         b.classList.toggle('active', isActive);
+        b.setAttribute('aria-selected', String(isActive));
     });
     renderHandshakeVisibility(hostCard, clientCard, mode);
     renderModeControlsFn();
@@ -232,6 +233,17 @@ export function renderBoard(
         boardEl.innerHTML = '<p class="hint">Start a session to see the board.</p>';
         return;
     }
+    const focusedCell = boardEl.querySelector<HTMLElement>('[data-x][data-y]:focus');
+    const focusedCoords = focusedCell
+        ? {
+              x: Number(focusedCell.dataset.x),
+              y: Number(focusedCell.dataset.y),
+          }
+        : null;
+    const hasFocusedCell =
+        focusedCoords != null &&
+        Number.isInteger(focusedCoords.x) &&
+        Number.isInteger(focusedCoords.y);
     boardEl.setAttribute('role', 'grid');
     boardEl.setAttribute('aria-label', 'Game board');
 
@@ -264,6 +276,10 @@ export function renderBoard(
                         : isNew && validationStatus === 'checking'
                             ? 'checking'
                             : '';
+            const isRovingCell =
+                hasFocusedCell && focusedCoords.x === x && focusedCoords.y === y;
+            const fallbackCell = !hasFocusedCell && x === 0 && y === 0;
+            const tabIndex = isRovingCell || fallbackCell ? 0 : -1;
             const classes = [
                 'cell',
                 premium,
@@ -282,7 +298,7 @@ export function renderBoard(
             if (isLastMove) parts.push('last move');
             const cellLabel = parts.filter(Boolean).join(', ');
             cells.push(
-                `<div class="${classes}" role="gridcell" tabindex="0" aria-label="${cellLabel}" data-x="${x}" data-y="${y}">
+                `<div class="${classes}" role="gridcell" tabindex="${tabIndex}" aria-label="${cellLabel}" data-x="${x}" data-y="${y}">
           ${tile ? `<span class="letter" aria-hidden="true">${escapeHtml(tile.letter)}</span><span class="value" aria-hidden="true">${escapeHtml(String(tile.value))}</span>` : ''}
         </div>`
             );
@@ -290,6 +306,10 @@ export function renderBoard(
         rows.push(`<div class="row" role="row">${cells.join('')}</div>`);
     }
     boardEl.innerHTML = rows.join('');
+    if (hasFocusedCell && focusedCoords) {
+        const nextCell = boardEl.querySelector<HTMLElement>(`[data-x="${focusedCoords.x}"][data-y="${focusedCoords.y}"]`);
+        nextCell?.focus();
+    }
 
     turnIndicator.textContent = labels[state.currentPlayer] ?? state.currentPlayer;
     turnIndicator.classList.toggle('active', meta?.localPlayerId === state.currentPlayer);
@@ -322,9 +342,10 @@ export function renderRack(
         .join('');
 
     const pendingTiles = placements.map((p) => renderTile(p.tile, false, true)).join('');
+    const pendingRow = pendingTiles ? `<div class="rack-row hint">Pending: ${pendingTiles}</div>` : '';
     rackEl.innerHTML = `
     <div class="rack-row">${tiles || '<span class="hint">Empty rack</span>'}</div>
-    <div class="rack-row hint">Pending: ${pendingTiles || 'None'}</div>
+    ${pendingRow}
   `;
 
     rackOwnerEl.textContent = `You are: ${labels[meta.localPlayerId] ?? meta.localPlayerId}`;
@@ -419,5 +440,3 @@ const premiumMap = buildPremiumMap();
 export function premiumClass(x: number, y: number): string {
     return (premiumMap.get(`${x},${y}`) ?? '').toLowerCase();
 }
-
-

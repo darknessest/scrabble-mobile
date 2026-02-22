@@ -92,6 +92,53 @@ describe('EndgameScanController', () => {
     expect(worker.postMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores unrelated worker responses and calls onGameEnd only for matching response', () => {
+    const onGameEnd = vi.fn();
+    controller.setOnGameEnd(onGameEnd);
+
+    controller.requestEndgameScanIfNeeded();
+    const worker = MockWorker.instances[0];
+    const request = worker.postMessage.mock.calls[0][0] as { requestId: string };
+
+    worker.emitMessage({
+      type: 'ENDGAME_SCAN_RESPONSE',
+      requestId: 'unrelated',
+      allStuck: true
+    });
+    expect(onGameEnd).toHaveBeenCalledTimes(0);
+    expect(statusEl.textContent).toBe('Checking endgame…');
+
+    worker.emitMessage({
+      type: 'ENDGAME_SCAN_RESPONSE',
+      requestId: request.requestId,
+      allStuck: true
+    });
+    expect(onGameEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns to idle state when scan reports no moves available', () => {
+    const onAppendLog = vi.fn();
+    appendLog = onAppendLog;
+    MockWorker.instances = [];
+    controller = new EndgameScanController(statusEl, onAppendLog);
+    controller.setMeta(makeHostMeta());
+    controller.setCurrentState(makeState());
+    controller.setOnGameEnd(vi.fn());
+
+    controller.requestEndgameScanIfNeeded();
+    const worker = MockWorker.instances.at(-1)!;
+    const request = worker.postMessage.mock.calls[0][0] as { requestId: string };
+
+    worker.emitMessage({
+      type: 'ENDGAME_SCAN_RESPONSE',
+      requestId: request.requestId,
+      allStuck: false
+    });
+
+    expect(statusEl.style.display).toBe('none');
+    expect(onAppendLog).toHaveBeenCalledWith(expect.stringContaining('moves available'));
+  });
+
   it('fires onGameEnd callback when worker reports allStuck=true', () => {
     const onGameEnd = vi.fn();
     controller.setOnGameEnd(onGameEnd);

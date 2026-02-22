@@ -16,7 +16,6 @@ export function computeAnchors(board: BoardCell[][]): Anchor[] {
   if (!boardHasAnyTiles(board)) return [{ x: 7, y: 7 }];
 
   const anchors: Anchor[] = [];
-  const seen = new Set<string>();
   for (let y = 0; y < BOARD_SIZE; y += 1) {
     for (let x = 0; x < BOARD_SIZE; x += 1) {
       if (board[y][x].tile) continue;
@@ -28,9 +27,6 @@ export function computeAnchors(board: BoardCell[][]): Anchor[] {
       ];
       const touches = neighbors.some(([nx, ny]) => inBounds(nx) && inBounds(ny) && board[ny][nx].tile);
       if (!touches) continue;
-      const key = `${x},${y}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
       anchors.push({ x, y });
     }
   }

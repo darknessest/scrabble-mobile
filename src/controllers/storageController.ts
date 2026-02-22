@@ -2,6 +2,8 @@ import type { SessionMeta, SnapshotPayload } from '../types';
 import type { GameState } from '../core/types';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from '../storage/indexedDb';
 
+const SNAPSHOT_VERSION = 1;
+
 export class StorageController {
     private pendingSnapshot: SnapshotPayload | null = null;
     private resumeBtn: HTMLButtonElement;
@@ -11,13 +13,11 @@ export class StorageController {
     constructor(
         resumeBtn: HTMLButtonElement,
         clearSnapshotBtn: HTMLButtonElement,
-        resumeNote: HTMLParagraphElement,
-        _appendLog: (msg: string) => void
+        resumeNote: HTMLParagraphElement
     ) {
         this.resumeBtn = resumeBtn;
         this.clearSnapshotBtn = clearSnapshotBtn;
         this.resumeNote = resumeNote;
-        // Append log is managed externally
     }
 
     async persistSnapshot(
@@ -27,6 +27,7 @@ export class StorageController {
     ): Promise<void> {
         if (!currentState || !meta) return;
         const payload: SnapshotPayload = {
+            version: SNAPSHOT_VERSION,
             state: currentState,
             meta,
             labels

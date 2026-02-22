@@ -118,26 +118,6 @@ describe('min-length filtering', () => {
   });
 });
 
-describe('getWordInfo', () => {
-  beforeEach(async () => {
-    loadDictionary.mockResolvedValue(sampleEntries as DictionaryData);
-    await mod.ensureDictionary('en');
-  });
-
-  it('returns structured info for a known word', async () => {
-    const info = await mod.getWordInfo('CAT', 'en');
-    expect(info).not.toBeNull();
-    expect(info!.word).toBe('CAT');
-    expect(info!.pos).toEqual(['noun']);
-    expect(info!.plural).toBe('CATS');
-  });
-
-  it('returns null for unknown words', async () => {
-    const info = await mod.getWordInfo('XYZZY', 'en');
-    expect(info).toBeNull();
-  });
-});
-
 describe('getDictionaryWordSet', () => {
   it('returns word set after loading', async () => {
     loadDictionary.mockResolvedValue(sampleEntries as DictionaryData);

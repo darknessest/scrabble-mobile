@@ -1,6 +1,6 @@
 import type { SessionMeta } from '../types';
 import type { GameState } from '../core/types';
-import { getInitialBagSize } from '../core/tiles';
+import { resolveMinWordLength } from '../utils/minWordLength';
 
 interface EndgameWorkerMessage {
     type: string;
@@ -57,16 +57,12 @@ export class EndgameScanController {
         this.onGameEndCallback = callback;
     }
 
-    private resolveMinWordLength(minLengthInput?: HTMLInputElement): number {
-        return minLengthInput ? Math.max(1, Math.floor(Number(minLengthInput.value) || 2)) : 2;
-    }
-
     private computeEndgameScanToken(minLengthInput?: HTMLInputElement): string | null {
         const meta = this.meta;
         const state = this.currentState;
         if (!meta || !state) return null;
         const variant = meta.russianDictionaryVariant ?? 'full';
-        const minLength = this.resolveMinWordLength(minLengthInput);
+        const minLength = resolveMinWordLength(minLengthInput?.value);
         return `${state.sessionId}:${state.moveNumber}:${meta.language}:${variant}:${minLength}`;
     }
 
@@ -120,9 +116,6 @@ export class EndgameScanController {
         if (!meta.isHost && meta.mode !== 'solo') return;
         if (!this.endgameWorker) return;
 
-        const initialBag = getInitialBagSize(state.language);
-        const shouldRunExpensive = state.bag.length < initialBag / 2;
-        if (!shouldRunExpensive) return;
         if (state.bag.length !== 0) return;
 
         const token = this.computeEndgameScanToken(minLengthInput);
@@ -143,7 +136,7 @@ export class EndgameScanController {
             state,
             language: meta.language,
             russianVariant: meta.russianDictionaryVariant,
-            minLength: this.resolveMinWordLength(minLengthInput),
+            minLength: resolveMinWordLength(minLengthInput?.value),
             debug
         });
     }
