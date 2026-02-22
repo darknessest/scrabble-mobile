@@ -29,10 +29,33 @@ export interface SessionMeta {
      */
     readyState?: Record<string, boolean>;
     gameStartAt?: number | null;
+    stateHash?: string;
+    vectorClock?: Record<string, number>;
+    messageSequence?: {
+        lastSentByPeer: Record<string, number>;
+        lastReceivedByPeer: Record<string, number>;
+    };
     rematch?: { requestedBy: Record<string, boolean>; at: number };
 }
 
+export type OperationType = 'MOVE' | 'PASS' | 'EXCHANGE';
+
+export interface LogAction {
+    placements?: Placement[];
+    tileIds?: string[];
+}
+
+export interface LogEntry {
+    sessionId: string;
+    seq: number;
+    action: LogAction;
+    timestamp: number;
+    playerId: string;
+    type: OperationType;
+}
+
 export interface SnapshotPayload {
+    version?: number;
     state: GameState;
     meta: SessionMeta;
     labels: Record<string, string>;
@@ -55,11 +78,11 @@ export interface GameOverEvent {
 }
 
 export type ActionMessage =
-    | { type: 'ACTION_MOVE'; placements: Placement[]; playerId: string }
-    | { type: 'ACTION_PASS'; playerId: string }
-    | { type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] }
-    | { type: 'ACTION_REMATCH_REQUEST'; playerId: string; at: number }
-    | { type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number }
-    | { type: 'PLAYER_READY'; playerId: string; ready: boolean }
-    | { type: 'REQUEST_SYNC' }
-    | { type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> };
+    | ({ type: 'ACTION_MOVE'; placements: Placement[]; playerId: string } & { seq?: number; ack?: number })
+    | ({ type: 'ACTION_PASS'; playerId: string } & { seq?: number; ack?: number })
+    | ({ type: 'ACTION_EXCHANGE'; playerId: string; tileIds: string[] } & { seq?: number; ack?: number })
+    | ({ type: 'ACTION_REMATCH_REQUEST'; playerId: string; at: number } & { seq?: number; ack?: number })
+    | ({ type: 'DRAFT_PLACEMENTS'; placements: Placement[]; playerId: string; moveNumber: number } & { seq?: number; ack?: number })
+    | ({ type: 'PLAYER_READY'; playerId: string; ready: boolean } & { seq?: number; ack?: number })
+    | ({ type: 'REQUEST_SYNC' } & { seq?: number; ack?: number })
+    | ({ type: 'SYNC_STATE'; state: GameState; meta: SessionMeta; labels: Record<string, string> } & { seq?: number; ack?: number });

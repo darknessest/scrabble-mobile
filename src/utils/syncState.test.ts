@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState, Tile } from '../core/types';
 import type { SessionMeta } from '../types';
-import { buildSyncStateForPeer } from './syncState';
+import { buildSyncStateForPeer, computeStateHash } from './syncState';
 
 function makeTile(id: string, letter: string, value: number): Tile {
   return { id, letter, value };
@@ -67,5 +67,22 @@ describe('buildSyncStateForPeer', () => {
     const synced = buildSyncStateForPeer(state, makeMeta({ remotePlayerId: undefined }));
 
     expect(synced).toBe(state);
+  });
+});
+
+describe('computeStateHash', () => {
+  it('returns same hash for equivalent states', () => {
+    const state = makeGameState();
+    const clone = structuredClone(state);
+
+    expect(computeStateHash(state)).toBe(computeStateHash(clone));
+  });
+
+  it('changes when state changes', () => {
+    const state = makeGameState();
+    const modified = structuredClone(state);
+    modified.moveNumber = 2;
+
+    expect(computeStateHash(state)).not.toBe(computeStateHash(modified));
   });
 });
