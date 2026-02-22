@@ -1,6 +1,8 @@
 import type { Language } from '../core/types';
 import type { App } from '../app';
 import { propagateMeta } from './controllerBus';
+import { resolveMinWordLength } from '../utils/minWordLength';
+import { computeStateHash } from '../utils/syncState';
 
 export interface SessionManager {
   startSession(): Promise<void>;
@@ -40,7 +42,7 @@ export function createSessionManager(app: App): SessionManager {
     const players = [localId];
     if (remoteId) players.push(remoteId);
 
-    const minWordLength = Math.max(1, Math.floor(Number(app.uiElements.minLengthInput.value) || 2));
+    const minWordLength = resolveMinWordLength(app.uiElements.minLengthInput.value);
 
     const timerDurationSec = Math.min(Math.max(Number(app.uiElements.timerInput.value) || 0, 1), 10) * 60;
     const timerEnabled = app.uiElements.timerEnabledToggle.checked && timerDurationSec > 0;
@@ -61,8 +63,10 @@ export function createSessionManager(app: App): SessionManager {
       remotePlayerId: remoteId,
       sessionId: state.sessionId,
       minWordLength,
+      vectorClock: {},
       timerEnabled,
       timerDurationSec,
+      stateHash: computeStateHash(state),
       turnDeadline: timerEnabled && shouldStartTimerNow ? Date.now() + timerDurationSec * 1000 : null,
       readyState: mode === 'host' && remoteId ? { [localId]: false, [remoteId]: false } : undefined,
       gameStartAt: mode === 'host' && remoteId ? null : undefined
@@ -98,6 +102,12 @@ export function createSessionManager(app: App): SessionManager {
     }
 
     app.state.meta = pendingSnapshot.meta;
+    if (!app.state.meta.stateHash) {
+      app.state.meta.stateHash = computeStateHash(pendingSnapshot.state);
+    }
+    if (!app.state.meta.vectorClock) {
+      app.state.meta.vectorClock = {};
+    }
     app.state.labels = pendingSnapshot.labels;
     app.uiElements.languageSelect.value = pendingSnapshot.meta.language;
     if (pendingSnapshot.meta.language === 'ru') {
@@ -144,6 +154,8 @@ export function createSessionManager(app: App): SessionManager {
     const newState = gameController.resetForRematch(language, players);
 
     meta.sessionId = newState.sessionId;
+    meta.stateHash = computeStateHash(newState);
+    meta.vectorClock = {};
     meta.gameOver = undefined;
     meta.lastTurnEvent = undefined;
     meta.rematch = undefined;

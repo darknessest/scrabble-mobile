@@ -21,6 +21,8 @@ import {
 } from './ui/uiRenderer';
 import { appendLog as appendLogUtil, formatGameOverReason } from './utils/appUtils';
 import { buildSyncStateForPeer } from './utils/syncState';
+import { resolveMinWordLength } from './utils/minWordLength';
+import { computeStateHash } from './utils/syncState';
 
 declare const __APP_VERSION__: string;
 const BASE_PATH = import.meta.env.BASE_URL ?? '/';
@@ -82,10 +84,7 @@ function updateValidationUI(): void {
     uiElements.wordCheckStatus.classList.add('danger');
     uiElements.wordCheckStatus.style.display = '';
 
-    const minWordLength = Math.max(
-      1,
-      Math.floor(state.meta.minWordLength ?? (Number(uiElements.minLengthInput.value) || 2))
-    );
+    const minWordLength = resolveMinWordLength(state.meta.minWordLength ?? uiElements.minLengthInput.value);
     const wordMatch = validationMessage?.match(/^Invalid word:\s*(.+)$/i);
     const isTooShort = wordMatch != null && wordMatch[1].trim().length < minWordLength;
     if (isTooShort) {
@@ -111,6 +110,7 @@ function applyActionButtonsState(): void {
 }
 
 let renderScheduled = false;
+let lastTimerTurnKey: string | null = null;
 
 function doRender(): void {
   renderScheduled = false;
@@ -124,7 +124,11 @@ function doRender(): void {
   renderRack(uiElements.rackEl, uiElements.rackOwnerEl, gameState, state.meta, placements, selectedTileId, gameController.getRackOrder(), gameController.syncLocalRackOrder.bind(gameController), state.labels);
   renderScores(uiElements.scoresEl, gameState, state.labels);
   renderStats(uiElements.bagCountEl, uiElements.moveHistoryEl, gameState, state.labels);
-  timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+  const nextTimerTurnKey = gameState ? `${gameState.sessionId}:${gameState.currentPlayer}` : null;
+  if (nextTimerTurnKey !== lastTimerTurnKey) {
+    timerController.resetTurnTimer(readyGate.isPreGameLocked.bind(readyGate));
+    lastTimerTurnKey = nextTimerTurnKey;
+  }
   endgameScanController.renderEndgameScanStatus();
   gameOverController.renderGameOverUi();
   readyGate.renderReadyOverlay();
@@ -141,6 +145,7 @@ function sendSync(): void {
   const gameState = gameController.getState();
   if (!gameState || !state.meta) return;
   const syncState = buildSyncStateForPeer(gameState, state.meta);
+  state.meta.stateHash = computeStateHash(syncState);
   controllers.networkController.send({
     type: 'SYNC_STATE',
     state: syncState,
@@ -204,6 +209,9 @@ function handleEndgameScanComplete(): void {
   game.applyEndGameScoring();
   const newState = game.getState();
   gameController.setCurrentState(newState);
+  if (state.meta) {
+    state.meta.stateHash = computeStateHash(buildSyncStateForPeer(newState, state.meta));
+  }
   state.meta.gameOver = {
     reason: 'no_moves_bag_empty',
     at: Date.now(),
@@ -306,7 +314,7 @@ function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return;
   window.addEventListener('load', () => {
     navigator.serviceWorker
-      .register(`${BASE_PATH}sw.js`)
+      .register(`${BASE_PATH}sw.js?v=${__APP_VERSION__}`)
       .then(() => appendLog('Service worker registered'))
       .catch((err) => appendLog(`SW registration failed: ${String(err)}`));
   });

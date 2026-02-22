@@ -1,6 +1,8 @@
 import type { App } from '../app';
 import type { ActionMessage, SessionMeta } from '../types';
 import { propagateMeta } from './controllerBus';
+import { isDuplicateOrStaleSequence, normalizeSequence } from '../utils/messageSequence';
+import { computeStateHash } from '../utils/syncState';
 
 function isActionMessage(data: unknown): data is ActionMessage {
   if (typeof data !== 'object' || data === null) return false;
@@ -23,6 +25,47 @@ function isActionMessage(data: unknown): data is ActionMessage {
   return true;
 }
 
+function isValidSequence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 0xFFFFFFFF;
+}
+
+function ensureMessageSequenceState(meta: SessionMeta | null): NonNullable<SessionMeta['messageSequence']> | null {
+  if (!meta) return null;
+
+  if (!meta.messageSequence) {
+    meta.messageSequence = {
+      lastSentByPeer: {},
+      lastReceivedByPeer: {}
+    };
+  }
+  return meta.messageSequence;
+}
+
+function getIncomingPeerId(msg: ActionMessage, meta: SessionMeta | null): string | null {
+  if ('playerId' in msg && typeof msg.playerId === 'string') {
+    return msg.playerId;
+  }
+  return meta?.remotePlayerId ?? null;
+}
+
+function shouldIgnoreDuplicateMessage(msg: ActionMessage, meta: SessionMeta | null): boolean {
+  if (!isValidSequence(msg.seq)) return false;
+
+  const peerId = getIncomingPeerId(msg, meta);
+  if (!peerId) return false;
+
+  const sequenceState = ensureMessageSequenceState(meta);
+  if (!sequenceState) return false;
+  const normalizedSeq = normalizeSequence(msg.seq);
+  const lastReceived = sequenceState.lastReceivedByPeer[peerId] ?? 0;
+  if (isDuplicateOrStaleSequence(normalizedSeq, lastReceived)) {
+    return true;
+  }
+
+  sequenceState.lastReceivedByPeer[peerId] = normalizedSeq;
+  return false;
+}
+
 export function createMessageHandler(
   app: App,
   restartForRematch: () => Promise<void>
@@ -40,21 +83,31 @@ export function createMessageHandler(
     }
     const msg = data;
 
+    const localMeta = app.state.meta;
+    if (shouldIgnoreDuplicateMessage(msg, localMeta)) {
+      app.appendLog(`Ignoring duplicate or stale message: type=${msg.type}`);
+      return;
+    }
+
     if (msg.type === 'SYNC_STATE') {
       const incoming = msg.meta;
       let newMeta: SessionMeta;
-      if (incoming.mode === 'host') {
-        newMeta = {
-          ...incoming,
-          mode: 'client',
-          isHost: false,
-          localPlayerId: incoming.remotePlayerId ?? incoming.localPlayerId,
-          remotePlayerId: incoming.localPlayerId
-        };
-      } else {
-        newMeta = { ...incoming, isHost: false };
-      }
-      app.state.meta = newMeta;
+        if (incoming.mode === 'host') {
+          newMeta = {
+            ...incoming,
+            mode: 'client',
+            isHost: false,
+            localPlayerId: incoming.remotePlayerId ?? incoming.localPlayerId,
+            remotePlayerId: incoming.localPlayerId
+          };
+        } else {
+          newMeta = { ...incoming, isHost: false };
+        }
+        if (!newMeta.vectorClock) {
+          newMeta.vectorClock = {};
+        }
+        newMeta.stateHash = computeStateHash(msg.state);
+        app.state.meta = newMeta;
       app.state.labels = msg.labels;
 
       await dictionaryController.ensureLanguage(newMeta.language);
