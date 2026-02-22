@@ -1,4 +1,5 @@
-const CACHE_NAME = 'scrabble-pwa-v4';
+const SW_VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
+const CACHE_NAME = `scrabble-pwa-${SW_VERSION}`;
 const BASE_PATH = new URL(self.registration.scope).pathname;
 const CORE_ASSETS = [
   `${BASE_PATH}`,

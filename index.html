@@ -60,10 +60,10 @@
               <span class="hint">Solo, Host (offer), or Join (answer)</span>
             </div>
             <div class="row wrap gap">
-              <div class="segmented" id="mode-tabs">
-                <button data-mode="solo" class="active">Solo</button>
-                <button data-mode="host">Host</button>
-                <button data-mode="client">Join</button>
+              <div class="segmented" id="mode-tabs" role="tablist" aria-label="Game mode">
+                <button data-mode="solo" role="tab" aria-selected="true">Solo</button>
+                <button data-mode="host" role="tab" aria-selected="false">Host</button>
+                <button data-mode="client" role="tab" aria-selected="false">Join</button>
               </div>
               <label class="stack flex1">
                 <span class="label">Your name</span>
@@ -178,9 +178,12 @@
               <h3>Board</h3>
               <div class="row gap">
                 <span class="label">Turn:</span>
-                <span id="turn-indicator" class="pill"></span>
-                <span id="timer-display" class="pill timer-pill"></span>
-                <span id="word-check-status" class="pill" style="display: none"></span>
+                <span id="turn-indicator" class="pill" aria-live="polite"></span>
+                <span id="timer-display" class="pill timer-pill" aria-live="off">
+                  <span data-role="timer-text"></span>
+                  <span class="sr-only" data-role="timer-live" aria-live="polite"></span>
+                </span>
+                <span id="word-check-status" class="pill" style="display: none" aria-live="polite"></span>
                 <span id="word-length-status" class="pill" style="display: none"></span>
                 <span id="endgame-scan-status" class="pill" style="display: none"></span>
               </div>
@@ -243,7 +246,7 @@
               <button id="clear-placements" class="ghost">Clear placements</button>
               <button id="mix-rack" class="ghost" title="Shuffle your rack tiles">Mix</button>
               <button id="pass-btn" class="ghost">Pass</button>
-              <button id="exchange-btn" class="ghost">Replace &amp; pass</button>
+              <button id="exchange-btn" class="ghost">Exchange tiles</button>
             </div>
           </div>
 
