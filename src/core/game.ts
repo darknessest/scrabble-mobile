@@ -12,6 +12,7 @@ import type {
   Premium,
   Tile
 } from './types';
+import type { SessionMeta } from '../types';
 
 export { BOARD_SIZE } from './boardUtils';
 const premiumMap = buildPremiumMap();
@@ -153,7 +154,8 @@ export class ScrabbleGame {
     playerId: string,
     placements: Placement[],
     checkWord: WordChecker,
-    minWordLength?: number
+    minWordLength?: number,
+    meta?: SessionMeta
   ): Promise<MoveResult> {
     const state = this.getState();
     if (state.currentPlayer !== playerId) {
@@ -243,6 +245,7 @@ export class ScrabbleGame {
       placedTiles: placements.length,
       timestamp: Date.now()
     });
+    bumpVectorClock(meta, playerId);
 
     // Check "going out": rack empty with bag empty ends the game immediately
     if (state.bag.length === 0 && state.racks[playerId].length === 0) {
@@ -260,7 +263,7 @@ export class ScrabbleGame {
     return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
   }
 
-  passTurn(playerId: string): MoveResult {
+  passTurn(playerId: string, meta?: SessionMeta): MoveResult {
     const state = this.getState();
     if (state.currentPlayer !== playerId) {
       return { success: false, message: 'Not your turn' };
@@ -273,6 +276,7 @@ export class ScrabbleGame {
       playerId,
       timestamp: Date.now()
     });
+    bumpVectorClock(meta, playerId);
     if (checkSequentialSkips(state)) {
       this.applyEndGameScoring();
       return {
@@ -283,7 +287,7 @@ export class ScrabbleGame {
     return { success: true };
   }
 
-  exchangeTiles(playerId: string, tileIds: string[]): MoveResult {
+  exchangeTiles(playerId: string, tileIds: string[], meta?: SessionMeta): MoveResult {
     const state = this.getState();
     if (state.currentPlayer !== playerId) {
       return { success: false, message: 'Not your turn' };
@@ -318,6 +322,7 @@ export class ScrabbleGame {
       exchangedTiles: removed.length,
       timestamp: Date.now()
     });
+    bumpVectorClock(meta, playerId);
     return { success: true };
   }
 }
@@ -343,6 +348,14 @@ function checkSequentialSkips(state: GameState): boolean {
   const okA = ids[0] === p0 && ids[1] === p1 && ids[2] === p0 && ids[3] === p1;
   const okB = ids[0] === p1 && ids[1] === p0 && ids[2] === p1 && ids[3] === p0;
   return okA || okB;
+}
+
+function bumpVectorClock(meta: SessionMeta | undefined, playerId: string): void {
+  if (!meta) return;
+  if (!meta.vectorClock) {
+    meta.vectorClock = {};
+  }
+  meta.vectorClock[playerId] = (meta.vectorClock[playerId] ?? 0) + 1;
 }
 
 async function hasValidMovesWithWords(

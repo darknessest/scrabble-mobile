@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { ScrabbleGame } from './game';
 import type { GameState, Placement } from './types';
+import type { SessionMeta } from '../types';
 
 // Mock crypto.randomUUID for deterministic testing
 let uuidCounter = 0;
@@ -246,6 +247,24 @@ describe('ScrabbleGame', () => {
         expect(game.getState().moveNumber).toBe(1);
     });
 
+    it('bumps vectorClock on pass when meta is provided', () => {
+        const meta: SessionMeta = {
+            mode: 'solo',
+            language: 'en',
+            isHost: true,
+            localPlayerId: 'p1',
+            sessionId: 'meta-pass',
+            vectorClock: {}
+        };
+
+        game.start('en', ['p1', 'p2']);
+
+        const result = game.passTurn('p1', meta);
+
+        expect(result.success).toBe(true);
+        expect(meta.vectorClock).toEqual({ p1: 1 });
+    });
+
     it('ends game after 4 consecutive passes (2 per player) and applies end-game scoring', () => {
         game.start('en', ['p1', 'p2']);
         withState((state) => {
@@ -285,6 +304,58 @@ describe('ScrabbleGame', () => {
         const newIds = newRack.map(t => t.id);
         expect(newIds).not.toContain(tilesToExchange[0]);
         expect(newIds).not.toContain(tilesToExchange[1]);
+    });
+
+    it('bumps vectorClock on exchange when meta is provided', () => {
+        const meta: SessionMeta = {
+            mode: 'solo',
+            language: 'en',
+            isHost: true,
+            localPlayerId: 'p1',
+            sessionId: 'meta-exchange',
+            vectorClock: {}
+        };
+
+        game.start('en', ['p1', 'p2']);
+        const state = game.getState();
+        const rack = state.racks['p1'];
+
+        const result = game.exchangeTiles('p1', [rack[0].id], meta);
+
+        expect(result.success).toBe(true);
+        expect(meta.vectorClock).toEqual({ p1: 1 });
+    });
+
+    it('bumps vectorClock for local player when placing move with meta', async () => {
+        const meta: SessionMeta = {
+            mode: 'solo',
+            language: 'en',
+            isHost: true,
+            localPlayerId: 'p1',
+            sessionId: 'meta-move',
+            vectorClock: {}
+        };
+
+        game.start('en', ['p1', 'p2']);
+        withState((state) => {
+            state.racks['p1'][0] = { id: 't1', letter: 'H', value: 4 };
+            state.racks['p1'][1] = { id: 't2', letter: 'I', value: 1 };
+        });
+        const state = game.getState();
+
+        const result = await game.placeMove(
+            'p1',
+            [
+                { x: 7, y: 7, tile: state.racks['p1'][0] },
+                { x: 8, y: 7, tile: state.racks['p1'][1] }
+            ],
+            mockCheckWord,
+            undefined,
+            meta
+        );
+
+        expect(result.success).toBe(true);
+        expect(meta.vectorClock).toEqual({ p1: 1 });
     });
 
     it('records move history entries for move, pass, and exchange', async () => {
