@@ -33,6 +33,10 @@ function appendLog(msg: string): void {
   appendLogUtil(uiElements.logEl, msg);
 }
 
+function showToast(msg: string, variant: 'info' | 'danger' = 'info', ms?: number): void {
+  toastManager.showToast(msg, variant, ms);
+}
+
 // --- Controllers ---
 const controllers = createControllers(uiElements, additional, appendLog);
 const {
@@ -264,6 +268,7 @@ const app: App = {
   uiElements,
   additional,
   appendLog,
+  showToast,
   renderAll,
   sendSync,
   checkAndHandleGameEnd,
