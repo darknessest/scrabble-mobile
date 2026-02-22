@@ -18,6 +18,7 @@ export interface App {
   uiElements: UiElements;
   additional: AdditionalElements;
   appendLog(msg: string): void;
+  showToast(msg: string, variant?: 'info' | 'danger', ms?: number): void;
   renderAll(): void;
   sendSync(): void;
   checkAndHandleGameEnd(): void;
