@@ -20,7 +20,7 @@ export interface App {
   appendLog(msg: string): void;
   showToast(msg: string, variant?: 'info' | 'danger', ms?: number): void;
   renderAll(): void;
-  sendSync(): void;
+  sendSync(sinceSeq?: number): void;
   checkAndHandleGameEnd(): void;
   markLocalReady(): void;
   maybeShowTimeoutToastFromMeta(m: SessionMeta): void;

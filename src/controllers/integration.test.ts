@@ -16,6 +16,22 @@ vi.mock('../dictionary/dictionaryService', () => ({
   hasWord: vi.fn().mockResolvedValue(true)
 }));
 
+vi.mock('../storage/indexedDb', () => ({
+  appendLogEntry: vi.fn().mockResolvedValue({
+    sessionId: 'test-session',
+    seq: 0,
+    action: {},
+    timestamp: Date.now(),
+    playerId: 'host',
+    type: 'PASS'
+  }),
+  getLogSince: vi.fn().mockResolvedValue([]),
+  clearLog: vi.fn(),
+  clearSnapshot: vi.fn(),
+  loadSnapshot: vi.fn(),
+  saveSnapshot: vi.fn()
+}));
+
 function createSpan(): HTMLSpanElement {
   return document.createElement('span');
 }
@@ -147,6 +163,7 @@ function makeControllers(gameController: GameController): Controllers {
       setLabels: vi.fn(),
       send: vi.fn(),
       getConnection: vi.fn().mockReturnValue(null),
+      requestSync: vi.fn(),
       setOnMessage: vi.fn(),
       setOnOpen: vi.fn(),
       setOnClose: vi.fn(),
@@ -155,6 +172,7 @@ function makeControllers(gameController: GameController): Controllers {
       buildHostOffer: vi.fn().mockResolvedValue(undefined),
       buildClientAnswer: vi.fn(),
       applyHostAnswer: vi.fn(),
+      handleAck: vi.fn(),
       setupAutoBuildClientAnswer: vi.fn(),
       setupAutoApplyHostAnswer: vi.fn(),
       triggerReconnect: vi.fn().mockResolvedValue(undefined)
