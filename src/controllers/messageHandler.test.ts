@@ -1,12 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { App, AppState } from '../app';
-import type { SessionMeta } from '../types';
+import type { SessionMeta, LogEntry } from '../types';
 import type { GameState } from '../core/types';
 import type { Controllers } from './controllerWiring';
 import type { UiElements } from '../ui/uiRenderer';
 import type { AdditionalElements } from '../ui/domElements';
 import { makeMockControllers } from './testFixtures';
 import { computeStateHash } from '../utils/syncState';
+
+vi.mock('../storage/indexedDb', () => ({
+  getLogSince: vi.fn()
+}));
+
+import { getLogSince } from '../storage/indexedDb';
 
 vi.mock('./controllerBus', () => ({
   propagateMeta: vi.fn()
@@ -16,6 +22,19 @@ import { propagateMeta } from './controllerBus';
 import { createMessageHandler } from './messageHandler';
 
 const mockedPropagateMeta = vi.mocked(propagateMeta);
+const mockedGetLogSince = vi.mocked(getLogSince);
+
+function makeLogEntry(override: Partial<LogEntry>): LogEntry {
+  return {
+    sessionId: 'test-session',
+    seq: 0,
+    action: {},
+    timestamp: Date.now(),
+    playerId: 'client',
+    type: 'PASS',
+    ...override
+  };
+}
 
 function makeFakeGameState(overrides: Partial<GameState> = {}): GameState {
   return {
@@ -35,18 +54,19 @@ function makeFakeGameState(overrides: Partial<GameState> = {}): GameState {
   } as unknown as GameState;
 }
 
-  function makeFakeHostMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
-    return {
-      mode: 'host',
-      language: 'en',
-      isHost: true,
-      gameStartAt: Date.now(),
-      localPlayerId: 'host',
-      remotePlayerId: 'client',
-      sessionId: 'test-session',
-      ...overrides
-    };
-  }
+function makeFakeHostMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
+  return {
+    mode: 'host',
+    language: 'en',
+    isHost: true,
+    gameStartAt: Date.now(),
+    localPlayerId: 'host',
+    remotePlayerId: 'client',
+    sessionId: 'test-session',
+    stateHash: computeStateHash(makeFakeGameState()),
+    ...overrides
+  };
+}
 
 function makeMockUiElements(): UiElements {
   return {
@@ -145,6 +165,7 @@ let restartForRematch: (() => Promise<void>) & { mock: { calls: unknown[][] } };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedGetLogSince.mockResolvedValue([]);
   app = makeMockApp();
   const fn = vi.fn().mockResolvedValue(undefined);
   restartForRematch = fn as unknown as typeof restartForRematch;
@@ -209,17 +230,210 @@ beforeEach(() => {
     });
   });
 
+  describe('ACK / NACK messages', () => {
+    it('sends MSG_ACK for inbound sequenced messages', async () => {
+      await handleMessage({ type: 'ACTION_PASS', playerId: 'client', seq: 12 });
+
+      expect(app.controllers.networkController.send).toHaveBeenCalledWith({
+        type: 'MSG_ACK',
+        ack: 12
+      });
+    });
+
+    it('forwards MSG_ACK to handleAck', async () => {
+      await handleMessage({ type: 'MSG_ACK', ack: 55 });
+
+      expect(app.controllers.networkController.handleAck).toHaveBeenCalledWith(55);
+    });
+
+    it('logs NACK and returns', async () => {
+      await handleMessage({ type: 'MSG_NACK', ack: 33, reason: 'test reason' });
+
+      expect(app.appendLog).toHaveBeenCalledWith('Received NACK for seq=33');
+      expect(app.renderAll).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('LOG_DELTA', () => {
+    it('applies contiguous operations when sequence matches local tail', async () => {
+      app.state.meta = makeFakeHostMeta({
+        mode: 'client',
+        isHost: false,
+        localPlayerId: 'client',
+        remotePlayerId: 'host',
+        diverged: true
+      });
+      vi.mocked(app.controllers.gameController.applyRemotePass).mockReturnValue(true);
+
+      mockedGetLogSince.mockResolvedValue([
+        makeLogEntry({ seq: 0 })
+      ]);
+
+      await handleMessage({
+        type: 'LOG_DELTA',
+        payload: {
+          sinceSeq: 0,
+          operations: [
+            makeLogEntry({
+              seq: 1,
+              type: 'PASS',
+              playerId: 'host'
+            })
+          ]
+        }
+      });
+
+      expect(app.controllers.gameController.applyRemotePass).toHaveBeenCalledWith('host');
+      expect(app.state.meta?.diverged).toBe(false);
+      expect(app.checkAndHandleGameEnd).toHaveBeenCalled();
+      expect(app.controllers.networkController.requestSync).not.toHaveBeenCalled();
+    });
+
+    it('falls back to full sync when operation sequences are not contiguous', async () => {
+      app.state.meta = makeFakeHostMeta({
+        mode: 'client',
+        isHost: false,
+        localPlayerId: 'client',
+        remotePlayerId: 'host',
+        diverged: true
+      });
+      mockedGetLogSince.mockResolvedValue([
+        makeLogEntry({ seq: 0 })
+      ]);
+
+      await handleMessage({
+        type: 'LOG_DELTA',
+        payload: {
+          sinceSeq: 0,
+          operations: [
+            makeLogEntry({
+              seq: 2,
+              type: 'PASS',
+              playerId: 'host'
+            })
+          ]
+        }
+      });
+
+      expect(app.controllers.networkController.requestSync).toHaveBeenCalled();
+      expect(app.state.meta?.diverged).toBe(true);
+      expect(app.controllers.gameController.applyRemotePass).not.toHaveBeenCalled();
+    });
+
+    it('falls back to full sync when remote sinceSeq does not match local tail', async () => {
+      app.state.meta = makeFakeHostMeta({
+        mode: 'client',
+        isHost: false,
+        localPlayerId: 'client',
+        remotePlayerId: 'host',
+        diverged: true
+      });
+      mockedGetLogSince.mockResolvedValue([
+        makeLogEntry({ seq: 0 })
+      ]);
+
+      await handleMessage({
+        type: 'LOG_DELTA',
+        payload: {
+          sinceSeq: 5,
+          operations: [
+            makeLogEntry({
+              seq: 6,
+              type: 'PASS',
+              playerId: 'host'
+            })
+          ]
+        }
+      });
+
+      expect(app.controllers.networkController.requestSync).toHaveBeenCalled();
+      expect(app.state.meta?.diverged).toBe(true);
+      expect(app.controllers.gameController.applyRemotePass).not.toHaveBeenCalled();
+    });
+
+    it('ignores invalid action results and requests sync', async () => {
+      app.state.meta = makeFakeHostMeta({
+        mode: 'client',
+        isHost: false,
+        localPlayerId: 'client',
+        remotePlayerId: 'host'
+      });
+      mockedGetLogSince.mockResolvedValue([
+        makeLogEntry({ seq: 0 })
+      ]);
+      vi.mocked(app.controllers.gameController.applyRemotePass).mockReturnValue(true);
+      vi.mocked(app.controllers.gameController.applyRemoteExchange).mockReturnValue(false);
+
+      await handleMessage({
+        type: 'LOG_DELTA',
+        payload: {
+          sinceSeq: 0,
+          operations: [
+            makeLogEntry({
+              seq: 1,
+              type: 'PASS',
+              playerId: 'host'
+            }),
+            makeLogEntry({
+              seq: 2,
+              type: 'EXCHANGE',
+              playerId: 'host',
+              action: { tileIds: ['t1'] }
+            })
+          ]
+        }
+      });
+
+      expect(app.controllers.gameController.applyRemotePass).toHaveBeenCalledWith('host');
+      expect(app.controllers.gameController.applyRemoteExchange).toHaveBeenCalledWith(['t1'], 'host');
+      expect(app.state.meta?.diverged).toBe(true);
+      expect(app.controllers.networkController.requestSync).toHaveBeenCalled();
+    });
+
+    it('ignores stale LOG_DELTA messages by sequence', async () => {
+      app.state.meta = makeFakeHostMeta({
+        mode: 'client',
+        isHost: false,
+        localPlayerId: 'client',
+        remotePlayerId: 'host',
+        messageSequence: {
+          lastSentByPeer: {},
+          lastReceivedByPeer: { host: 10 }
+        }
+      });
+      mockedGetLogSince.mockResolvedValue([
+        makeLogEntry({ seq: 0 })
+      ]);
+      vi.mocked(app.controllers.gameController.applyRemotePass).mockReturnValue(true);
+
+      await handleMessage({
+        type: 'LOG_DELTA',
+        seq: 9,
+        payload: {
+          sinceSeq: 0,
+          operations: [
+            makeLogEntry({
+              seq: 1,
+              type: 'PASS',
+              playerId: 'host'
+            })
+          ]
+        }
+      });
+
+      expect(app.controllers.gameController.applyRemotePass).not.toHaveBeenCalled();
+      expect(app.appendLog).toHaveBeenCalledWith(expect.stringContaining('Ignoring duplicate or stale message'));
+    });
+  });
+
   describe('SYNC_STATE', () => {
     it('constructs client meta from host meta with swapped player IDs', async () => {
       const incomingState = makeFakeGameState();
-      const incomingMeta: SessionMeta = {
+      const incomingMeta = makeFakeHostMeta({
         mode: 'host',
-        language: 'en',
-        isHost: true,
         localPlayerId: 'host',
-        remotePlayerId: 'client',
-        sessionId: 'test-session'
-      };
+        remotePlayerId: 'client'
+      });
       const incomingLabels = { host: 'Host Player', client: 'Client Player' };
 
       await handleMessage({
@@ -284,10 +498,9 @@ beforeEach(() => {
       expect(app.applyModeUIInternal).toHaveBeenCalled();
     });
 
-    it('recomputes stateHash when syncing', async () => {
+    it('requests sync on hash mismatch and marks diverged', async () => {
       const incomingState = makeFakeGameState();
       const incomingMeta = makeFakeHostMeta({ stateHash: 'stale-hash' });
-      const expectedHash = computeStateHash(incomingState);
 
       await handleMessage({
         type: 'SYNC_STATE',
@@ -296,8 +509,32 @@ beforeEach(() => {
         labels: {}
       });
 
-      expect(app.state.meta!.stateHash).toBe(expectedHash);
-      expect(app.state.meta!.stateHash).not.toBe('stale-hash');
+      expect(app.state.meta!.stateHash).toBe('stale-hash');
+      expect(app.state.meta!.diverged).toBe(true);
+      expect(app.controllers.networkController.requestSync).toHaveBeenCalled();
+      expect(app.appendLog).toHaveBeenCalledWith(
+        expect.stringContaining('State hash mismatch for session test-session')
+      );
+      expect(app.controllers.gameController.resume).not.toHaveBeenCalled();
+    });
+
+    it('clears diverged flag after successful hash-verified sync', async () => {
+      app.state.meta = makeFakeHostMeta({ diverged: true });
+      const incomingState = makeFakeGameState();
+      const incomingMeta = makeFakeHostMeta({
+        stateHash: computeStateHash(incomingState)
+      });
+
+      await handleMessage({
+        type: 'SYNC_STATE',
+        state: incomingState,
+        meta: incomingMeta,
+        labels: {}
+      });
+
+      expect(app.state.meta!.diverged).toBe(false);
+      expect(app.state.meta!.stateHash).toBe(computeStateHash(incomingState));
+      expect(app.controllers.networkController.requestSync).not.toHaveBeenCalled();
     });
 
     it('initializes vectorClock when missing in incoming sync meta', async () => {
@@ -389,7 +626,7 @@ beforeEach(() => {
       expect(app.controllers.dictionaryController.downloadRuStrict).toHaveBeenCalled();
     });
 
-    it('does not download ru strict for non-strict variant', async () => {
+      it('does not download ru strict for non-strict variant', async () => {
       const incomingMeta = makeFakeHostMeta({ language: 'ru', russianDictionaryVariant: 'full' });
       await handleMessage({
         type: 'SYNC_STATE',
@@ -420,6 +657,7 @@ beforeEach(() => {
         isHost: false,
         localPlayerId: 'client',
         remotePlayerId: 'host',
+        stateHash: computeStateHash(makeFakeGameState()),
         sessionId: 'test-session'
       };
 
@@ -431,6 +669,18 @@ beforeEach(() => {
       });
 
       expect(app.state.meta!.isHost).toBe(false);
+    });
+
+    it('blocks action handling while diverged', async () => {
+      app.state.meta = makeFakeHostMeta({ diverged: true });
+
+      await handleMessage({
+        type: 'ACTION_PASS',
+        playerId: 'client'
+      });
+
+      expect(app.controllers.gameController.submitPass).not.toHaveBeenCalled();
+      expect(app.appendLog).toHaveBeenCalledWith('Ignoring ACTION_PASS while state is diverged.');
     });
   });
 

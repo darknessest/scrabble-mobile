@@ -1,18 +1,20 @@
 import type { App } from '../app';
-import type { ActionMessage, SessionMeta } from '../types';
+import type { ActionMessage, LogEntry, SessionMeta } from '../types';
 import { propagateMeta } from './controllerBus';
 import { isDuplicateOrStaleSequence, normalizeSequence } from '../utils/messageSequence';
-import { computeStateHash } from '../utils/syncState';
+import { computeStateHash, verifyStateHash } from '../utils/syncState';
+import { getLogSince } from '../storage/indexedDb';
 
 function isActionMessage(data: unknown): data is ActionMessage {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   if (typeof obj.type !== 'string') return false;
-  const validTypes = [
-    'ACTION_MOVE', 'ACTION_PASS', 'ACTION_EXCHANGE',
-    'ACTION_REMATCH_REQUEST', 'DRAFT_PLACEMENTS', 'PLAYER_READY',
-    'REQUEST_SYNC', 'SYNC_STATE'
-  ];
+    const validTypes = [
+      'ACTION_MOVE', 'ACTION_PASS', 'ACTION_EXCHANGE',
+      'ACTION_REMATCH_REQUEST', 'DRAFT_PLACEMENTS', 'PLAYER_READY',
+      'REQUEST_SYNC', 'SYNC_STATE', 'LOG_DELTA',
+      'MSG_ACK', 'MSG_NACK'
+    ];
   if (!validTypes.includes(obj.type)) return false;
   // Validate playerId exists for messages that require it
   if (['ACTION_MOVE', 'ACTION_PASS', 'ACTION_EXCHANGE', 'ACTION_REMATCH_REQUEST', 'DRAFT_PLACEMENTS', 'PLAYER_READY'].includes(obj.type)) {
@@ -22,11 +24,60 @@ function isActionMessage(data: unknown): data is ActionMessage {
   if (obj.type === 'ACTION_MOVE' && !Array.isArray(obj.placements)) return false;
   if (obj.type === 'ACTION_EXCHANGE' && !Array.isArray(obj.tileIds)) return false;
   if (obj.type === 'SYNC_STATE' && (typeof obj.state !== 'object' || typeof obj.meta !== 'object')) return false;
+  if (obj.type === 'LOG_DELTA' && !isValidLogDeltaPayload(obj.payload)) return false;
   return true;
 }
 
 function isValidSequence(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 0xFFFFFFFF;
+}
+
+function isValidSequenceOrMinusOne(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= -1;
+}
+
+function isValidLogOperation(value: unknown): value is LogEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.seq !== 'number' || !Number.isInteger(entry.seq) || entry.seq < 0) return false;
+  if (typeof entry.playerId !== 'string' || entry.playerId.length === 0) return false;
+  if (entry.type !== 'MOVE' && entry.type !== 'PASS' && entry.type !== 'EXCHANGE') return false;
+
+  if (entry.type === 'MOVE') {
+    const action = entry.action as Record<string, unknown> | undefined;
+    if (!action || !Array.isArray(action.placements)) return false;
+  } else if (entry.type === 'EXCHANGE') {
+    const action = entry.action as Record<string, unknown> | undefined;
+    if (!action || !Array.isArray(action.tileIds)) return false;
+  }
+
+  return true;
+}
+
+function isValidLogDeltaPayload(value: unknown): value is { sinceSeq: number; operations: LogEntry[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  const payload = value as Record<string, unknown>;
+  if (!isValidSequenceOrMinusOne(payload.sinceSeq)) return false;
+  if (!Array.isArray(payload.operations)) return false;
+  if (!payload.operations.every(isValidLogOperation)) return false;
+  return true;
+}
+
+function isContiguousLogSequence(sinceSeq: number, operations: LogEntry[]): boolean {
+  if (operations.length === 0) return true;
+  if (operations[0].seq !== sinceSeq + 1) return false;
+
+  for (let index = 1; index < operations.length; index += 1) {
+    const previous = operations[index - 1].seq;
+    const current = operations[index].seq;
+    if (current !== previous + 1) return false;
+  }
+
+  return true;
+}
+
+function logSeqList(operations: LogEntry[]): number[] {
+  return operations.map((operation) => operation.seq);
 }
 
 function ensureMessageSequenceState(meta: SessionMeta | null): NonNullable<SessionMeta['messageSequence']> | null {
@@ -83,31 +134,131 @@ export function createMessageHandler(
     }
     const msg = data;
 
+    if (msg.type !== 'MSG_ACK' && msg.type !== 'MSG_NACK' && isValidSequence(msg.seq)) {
+      app.controllers.networkController.send({ type: 'MSG_ACK', ack: msg.seq });
+    }
+
     const localMeta = app.state.meta;
-    if (shouldIgnoreDuplicateMessage(msg, localMeta)) {
+    if (msg.type !== 'MSG_ACK' && msg.type !== 'MSG_NACK' && shouldIgnoreDuplicateMessage(msg, localMeta)) {
       app.appendLog(`Ignoring duplicate or stale message: type=${msg.type}`);
+      return;
+    }
+
+    if (msg.type === 'MSG_ACK') {
+      if (isValidSequence(msg.ack)) {
+        app.controllers.networkController.handleAck(msg.ack);
+      }
+      return;
+    }
+
+    if (msg.type === 'MSG_NACK') {
+      if (isValidSequence(msg.ack)) {
+        app.appendLog(`Received NACK for seq=${msg.ack}`);
+      }
+      return;
+    }
+
+    if (msg.type === 'LOG_DELTA') {
+      const payload = msg.payload;
+      const deltaMeta = app.state.meta;
+      if (!deltaMeta || !deltaMeta.sessionId) return;
+      const { localPlayerId, mode, isHost } = deltaMeta;
+      if (mode === 'solo' || isHost || !localPlayerId) {
+        app.appendLog(`Ignoring LOG_DELTA on invalid role: mode=${mode}, isHost=${isHost}.`);
+        return;
+      }
+
+      const gameState = gameController.getState();
+      if (!gameState) return;
+
+      const localOperations = await getLogSince(gameState.sessionId, -1);
+      const localTailSeq = localOperations.length > 0 ? localOperations[localOperations.length - 1].seq : -1;
+      if (localTailSeq !== payload.sinceSeq) {
+        app.appendLog(`LOG_DELTA gap detected: local=${localTailSeq}, remote=${payload.sinceSeq}`);
+        if (app.state.meta) {
+          app.state.meta.diverged = true;
+        }
+        app.controllers.networkController.requestSync();
+        return;
+      }
+
+      if (!isContiguousLogSequence(payload.sinceSeq, payload.operations)) {
+        app.appendLog(`Ignoring LOG_DELTA due to non-contiguous seq: ${logSeqList(payload.operations).join(',')}`);
+        deltaMeta.diverged = true;
+        app.controllers.networkController.requestSync();
+        return;
+      }
+
+      for (const operation of payload.operations) {
+        let success = false;
+        if (operation.type === 'MOVE') {
+          success = await gameController.submitRemoteMove(
+            operation.action.placements ?? [],
+            operation.playerId,
+            gameController.buildWordChecker.bind(gameController)
+          );
+        } else if (operation.type === 'PASS') {
+          success = await gameController.applyRemotePass(operation.playerId);
+        } else {
+          success = await gameController.applyRemoteExchange(operation.action.tileIds ?? [], operation.playerId);
+        }
+
+        if (!success) {
+          app.appendLog(`Applying LOG_DELTA failed at seq=${operation.seq}.`);
+          deltaMeta.diverged = true;
+          app.controllers.networkController.requestSync();
+          return;
+        }
+
+        if (deltaMeta.gameOver) {
+          await app.finalizeGameEnd();
+        } else {
+          app.checkAndHandleGameEnd();
+        }
+      }
+
+      deltaMeta.diverged = false;
+      const syncedState = gameController.getState() ?? gameState;
+      deltaMeta.stateHash = computeStateHash(syncedState);
+      app.appendLog(`Applied LOG_DELTA with ${payload.operations.length} operation(s).`);
       return;
     }
 
     if (msg.type === 'SYNC_STATE') {
       const incoming = msg.meta;
       let newMeta: SessionMeta;
-        if (incoming.mode === 'host') {
-          newMeta = {
-            ...incoming,
-            mode: 'client',
-            isHost: false,
-            localPlayerId: incoming.remotePlayerId ?? incoming.localPlayerId,
-            remotePlayerId: incoming.localPlayerId
-          };
-        } else {
-          newMeta = { ...incoming, isHost: false };
-        }
-        if (!newMeta.vectorClock) {
-          newMeta.vectorClock = {};
-        }
-        newMeta.stateHash = computeStateHash(msg.state);
+      if (incoming.mode === 'host') {
+        newMeta = {
+          ...incoming,
+          mode: 'client',
+          isHost: false,
+          localPlayerId: incoming.remotePlayerId ?? incoming.localPlayerId,
+          remotePlayerId: incoming.localPlayerId
+        };
+      } else {
+        newMeta = { ...incoming, isHost: false };
+      }
+
+      if (!newMeta.vectorClock) {
+        newMeta.vectorClock = {};
+      }
+
+      const remoteHash = incoming.stateHash;
+      const localHash = computeStateHash(msg.state);
+      if (!verifyStateHash(msg.state, remoteHash)) {
+        newMeta.diverged = true;
         app.state.meta = newMeta;
+        app.state.labels = msg.labels;
+        app.appendLog(`State hash mismatch for session ${incoming.sessionId}; remote=${remoteHash ?? 'missing'}, local=${localHash}`);
+        if (!newMeta.isHost) {
+          app.controllers.networkController.requestSync();
+        }
+        return;
+      }
+
+      newMeta.diverged = false;
+      newMeta.stateHash = localHash;
+      app.state.meta = newMeta;
       app.state.labels = msg.labels;
 
       await dictionaryController.ensureLanguage(newMeta.language);
@@ -143,6 +294,11 @@ export function createMessageHandler(
       return;
     }
 
+    if (app.state.meta?.diverged && msg.type !== 'REQUEST_SYNC') {
+      app.appendLog(`Ignoring ${msg.type} while state is diverged.`);
+      return;
+    }
+
     if (msg.type === 'PLAYER_READY') {
       const meta = app.state.meta;
       if (!meta?.isHost || !gameController.getState()) return;
@@ -173,7 +329,7 @@ export function createMessageHandler(
 
     if (msg.type === 'REQUEST_SYNC') {
       const meta = app.state.meta;
-      if (meta?.isHost && gameController.getState()) app.sendSync();
+      if (meta?.isHost && gameController.getState()) app.sendSync(msg.sinceSeq);
       return;
     }
 
