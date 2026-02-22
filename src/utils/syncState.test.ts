@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState, Tile } from '../core/types';
 import type { SessionMeta } from '../types';
-import { buildSyncStateForPeer, computeStateHash } from './syncState';
+import { buildSyncStateForPeer, computeStateHash, verifyStateHash } from './syncState';
 
 function makeTile(id: string, letter: string, value: number): Tile {
   return { id, letter, value };
@@ -84,5 +84,25 @@ describe('computeStateHash', () => {
     modified.moveNumber = 2;
 
     expect(computeStateHash(state)).not.toBe(computeStateHash(modified));
+  });
+});
+
+describe('verifyStateHash', () => {
+  it('returns true for matching hashes', () => {
+    const state = makeGameState();
+
+    expect(verifyStateHash(state, computeStateHash(state))).toBe(true);
+  });
+
+  it('returns false when hashes differ', () => {
+    const state = makeGameState();
+
+    expect(verifyStateHash(state, 'mismatch')).toBe(false);
+  });
+
+  it('returns false when hash is missing', () => {
+    const state = makeGameState();
+
+    expect(verifyStateHash(state, undefined)).toBe(false);
   });
 });

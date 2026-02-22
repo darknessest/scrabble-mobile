@@ -145,6 +145,14 @@ export function computeStateHash(gameState: GameState): string {
   return djb2(JSON.stringify(normalizeState(gameState)));
 }
 
+export function verifyStateHash(gameState: GameState, stateHash?: string | null): boolean {
+  if (!stateHash) {
+    return false;
+  }
+
+  return computeStateHash(gameState) === stateHash;
+}
+
 export function buildSyncStateForPeer(gameState: GameState, meta: SessionMeta): GameState {
   if (!meta.isHost || !meta.remotePlayerId) return gameState;
 
