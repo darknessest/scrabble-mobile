@@ -291,6 +291,53 @@ export class GameController {
         return true;
     }
 
+    applyRemotePass(actingPlayerId: string): boolean {
+        const state = this.currentState;
+        const meta = this.meta;
+        if (!state || !meta) return false;
+
+        const result = this.game.passTurn(actingPlayerId, meta);
+        if (!result.success) {
+            this.reportError(result.message ?? 'Cannot pass');
+            return false;
+        }
+        this.currentState = this.game.getState();
+        this.refreshLocalStateHash();
+        void this.logAction(this.currentState.sessionId, actingPlayerId, 'PASS');
+        if (meta.timerEnabled) meta.turnDeadline = null;
+        this.onRenderAll();
+        void this.onPersist();
+        this.onSync();
+        this.handlePostMoveResult(result, meta);
+        return true;
+    }
+
+    applyRemoteExchange(tileIds: string[], actingPlayerId: string): boolean {
+        const state = this.currentState;
+        const meta = this.meta;
+        if (!state || !meta) return false;
+
+        const result = this.game.exchangeTiles(actingPlayerId, tileIds, meta);
+        if (!result.success) {
+            this.reportError(result.message ?? 'Exchange rejected');
+            return false;
+        }
+        this.currentState = this.game.getState();
+        this.refreshLocalStateHash();
+        void this.logAction(this.currentState.sessionId, actingPlayerId, 'EXCHANGE', {
+            tileIds: [...tileIds]
+        });
+        this.placements = [];
+        this.selectedTileId = null;
+        if (meta.timerEnabled) meta.turnDeadline = null;
+        this.updateValidation();
+        this.onRenderAll();
+        void this.onPersist();
+        this.onSync();
+        this.onGameEnd();
+        return true;
+    }
+
     submitPass(actingPlayerId?: string): boolean {
         const state = this.currentState;
         const meta = this.meta;

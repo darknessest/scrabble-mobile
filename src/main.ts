@@ -23,9 +23,11 @@ import { appendLog as appendLogUtil, formatGameOverReason } from './utils/appUti
 import { buildSyncStateForPeer } from './utils/syncState';
 import { resolveMinWordLength } from './utils/minWordLength';
 import { computeStateHash } from './utils/syncState';
+import { getLogSince } from './storage/indexedDb';
 
 declare const __APP_VERSION__: string;
 const BASE_PATH = import.meta.env.BASE_URL ?? '/';
+const LOG_DELTA_MAX_ENTRIES = 50;
 
 // --- DOM elements ---
 const uiElements = getUiElements();
@@ -141,18 +143,41 @@ function renderAll(): void {
   requestAnimationFrame(doRender);
 }
 
-function sendSync(): void {
+function sendSync(sinceSeq?: number): void {
   const gameState = gameController.getState();
-  if (!gameState || !state.meta) return;
-  const syncState = buildSyncStateForPeer(gameState, state.meta);
-  state.meta.stateHash = computeStateHash(syncState);
+  const activeMeta = state.meta;
+  if (!gameState || !activeMeta) return;
+
+  void (async () => {
+    if (typeof sinceSeq === 'number') {
+      const operations = await getLogSince(gameState.sessionId, sinceSeq);
+
+      const hasGap = operations.length > 0 && operations[0].seq !== sinceSeq + 1;
+      if (!hasGap && operations.length <= LOG_DELTA_MAX_ENTRIES) {
+        controllers.networkController.send({
+          type: 'LOG_DELTA',
+          payload: {
+            sinceSeq,
+            operations
+          }
+        });
+        appendLog(`Sent LOG_DELTA with ${operations.length} operation(s).`);
+        return;
+      }
+
+      appendLog(`Fallback to full sync: missing operations cannot be represented as safe delta (count=${operations.length}, gap=${hasGap}).`);
+    }
+
+  const syncState = buildSyncStateForPeer(gameState, activeMeta);
+  activeMeta.stateHash = computeStateHash(syncState);
   controllers.networkController.send({
     type: 'SYNC_STATE',
     state: syncState,
-    meta: state.meta,
+    meta: activeMeta,
     labels: state.labels
   });
   appendLog('Sync pushed to peer.');
+  })();
 }
 
 function sendDraftPlacements(): void {
