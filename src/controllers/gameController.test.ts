@@ -2,6 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GameController } from './gameController';
 import type { Placement } from '../core/types';
 import type { SessionMeta } from '../types';
+import { appendLogEntry } from '../storage/indexedDb';
+import { computeStateHash } from '../utils/syncState';
+
+vi.mock('../storage/indexedDb', () => ({
+  appendLogEntry: vi.fn().mockResolvedValue({
+    sessionId: 'mock-session',
+    seq: 0,
+    action: {},
+    timestamp: 0,
+    playerId: 'p1',
+    type: 'PASS'
+  }),
+  getLogSince: vi.fn(),
+  trimLog: vi.fn()
+}));
 
 // Mock the dictionary service
 vi.mock('../dictionary/dictionaryService', () => ({
@@ -11,6 +26,7 @@ vi.mock('../dictionary/dictionaryService', () => ({
 let gc: GameController;
 beforeEach(() => {
   gc = new GameController(() => {});
+  vi.clearAllMocks();
 });
 
 describe('start', () => {
@@ -86,13 +102,14 @@ describe('submitMove / submitRemoteMove', () => {
     gc.setOnGameEnd(onGameEnd);
 
     const state = gc.start('en', ['p1', 'p2']);
-    gc.setMeta({
+    const meta: SessionMeta = {
       mode: 'solo',
       language: 'en',
       isHost: true,
       localPlayerId: 'p1',
       sessionId: state.sessionId
-    });
+    };
+    gc.setMeta(meta);
 
     const placements: Placement[] = [{ x: 7, y: 7, tile: state.racks['p1'][0] }];
     (gc as unknown as { placements: Placement[] }).placements = placements;
@@ -105,12 +122,26 @@ describe('submitMove / submitRemoteMove', () => {
 
     const result = await gc.submitMove(() => vi.fn().mockResolvedValue(true));
     expect(result).toBe(true);
-    expect(placeMoveSpy).toHaveBeenCalledWith('p1', placements, expect.any(Function), undefined);
+    expect(placeMoveSpy).toHaveBeenCalledWith('p1', placements, expect.any(Function), undefined, meta);
     expect(gc.getPlacements()).toEqual([]);
     expect(onRenderAll).toHaveBeenCalled();
     expect(onPersist).toHaveBeenCalled();
     expect(onSync).toHaveBeenCalled();
     expect(onGameEnd).toHaveBeenCalled();
+    expect(appendLogEntry).toHaveBeenCalledWith({
+      sessionId: state.sessionId,
+      type: 'MOVE',
+      playerId: 'p1',
+      action: {
+        placements: [
+          {
+            x: placements[0].x,
+            y: placements[0].y,
+            tile: expect.objectContaining(placements[0].tile)
+          }
+        ]
+      }
+    });
   });
 
   it('returns false and logs on failed local move (invalid word)', async () => {
@@ -133,6 +164,7 @@ describe('submitMove / submitRemoteMove', () => {
     const result = await localGc.submitMove(() => vi.fn().mockResolvedValue(false));
     expect(result).toBe(false);
     expect(appendLog).toHaveBeenCalledWith('Invalid word: ZZ');
+    expect(appendLogEntry).not.toHaveBeenCalled();
   });
 
   it('resets timer deadline after successful move', async () => {
@@ -219,9 +251,23 @@ describe('submitMove / submitRemoteMove', () => {
 
     const result = await gc.submitRemoteMove(placements, 'client', () => vi.fn().mockResolvedValue(true));
     expect(result).toBe(true);
-    expect(placeMoveSpy).toHaveBeenCalledWith('client', placements, expect.any(Function), undefined);
+    expect(placeMoveSpy).toHaveBeenCalledWith('client', placements, expect.any(Function), undefined, meta);
     expect(meta.turnDeadline).toBeNull();
     expect(onSync).toHaveBeenCalled();
+    expect(appendLogEntry).toHaveBeenCalledWith({
+      sessionId: state.sessionId,
+      type: 'MOVE',
+      playerId: 'client',
+      action: {
+        placements: [
+          {
+            x: placements[0].x,
+            y: placements[0].y,
+            tile: expect.objectContaining(placements[0].tile)
+          }
+        ]
+      }
+    });
   });
 });
 
@@ -248,6 +294,12 @@ describe('submitPass', () => {
     const result = await gc.submitPass();
     expect(result).toBe(true);
     expect(gc.getState()!.currentPlayer).toBe('p2');
+    expect(appendLogEntry).toHaveBeenCalledWith({
+      sessionId: state.sessionId,
+      type: 'PASS',
+      playerId: 'p1',
+      action: {}
+    });
     expect(onRenderAll).toHaveBeenCalled();
     expect(onSync).toHaveBeenCalled();
     expect(onGameEnd).toHaveBeenCalled();
@@ -272,6 +324,27 @@ describe('submitPass', () => {
     const result = await gc.submitPass();
     expect(result).toBe(false);
   });
+
+  it('updates meta.stateHash when local pass changes state', async () => {
+    const onSync = vi.fn();
+    gc.setOnSync(onSync);
+    const state = gc.start('en', ['p1', 'p2']);
+    const beforeHash = computeStateHash(state);
+    const meta: SessionMeta = {
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId,
+      stateHash: beforeHash
+    };
+    gc.setMeta(meta);
+
+    await gc.submitPass();
+
+    expect(meta.stateHash).not.toBe(beforeHash);
+    expect(onSync).toHaveBeenCalled();
+  });
 });
 
 describe('submitExchange', () => {
@@ -290,6 +363,90 @@ describe('submitExchange', () => {
     const result = await gc.submitExchange([tileId]);
     expect(result).toBe(true);
     expect(gc.getState()!.currentPlayer).toBe('p2');
+    expect(appendLogEntry).toHaveBeenCalledWith({
+      sessionId: state.sessionId,
+      type: 'EXCHANGE',
+      playerId: 'p1',
+      action: {
+        tileIds: [tileId]
+      }
+    });
+  });
+
+  it('updates meta.stateHash on exchange', async () => {
+    const onSync = vi.fn();
+    gc.setOnSync(onSync);
+    const state = gc.start('en', ['p1', 'p2']);
+    const beforeHash = computeStateHash(state);
+    const tileId = state.racks['p1'][0].id;
+    const meta: SessionMeta = {
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId,
+      stateHash: beforeHash
+    };
+    gc.setMeta(meta);
+
+    const result = await gc.submitExchange([tileId]);
+
+    expect(result).toBe(true);
+    expect(meta.stateHash).not.toBe(beforeHash);
+    expect(onSync).toHaveBeenCalled();
+  });
+});
+
+describe('state synchronization metadata', () => {
+  it('updates stateHash on successful local move', async () => {
+    const onSync = vi.fn();
+    gc.setOnSync(onSync);
+    const state = gc.start('en', ['p1', 'p2']);
+    const beforeHash = computeStateHash(state);
+    const meta: SessionMeta = {
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId,
+      stateHash: beforeHash
+    };
+    gc.setMeta(meta);
+
+    (gc as unknown as { placements: Placement[] }).placements = [
+      { x: 7, y: 7, tile: state.racks['p1'][0] }
+    ];
+
+    const result = await gc.submitMove(() => vi.fn().mockResolvedValue(true));
+
+    expect(result).toBe(true);
+    expect(meta.stateHash).not.toBe(beforeHash);
+    expect(onSync).toHaveBeenCalled();
+  });
+
+  it('updates stateHash on successful remote move', async () => {
+    const onSync = vi.fn();
+    gc.setOnSync(onSync);
+    const state = gc.start('en', ['client', 'host']);
+    const beforeHash = computeStateHash(state);
+    const meta: SessionMeta = {
+      mode: 'host',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'host',
+      remotePlayerId: 'client',
+      sessionId: state.sessionId,
+      stateHash: beforeHash
+    };
+    gc.setMeta(meta);
+
+    const placement: Placement = { x: 7, y: 7, tile: state.racks['client'][0] };
+    const result = await gc.submitRemoteMove([placement], 'client', () => vi.fn().mockResolvedValue(true));
+
+    expect(result).toBe(true);
+    expect(meta.stateHash).not.toBe(beforeHash);
+    expect(meta.vectorClock?.client).toBe(1);
+    expect(onSync).toHaveBeenCalled();
   });
 });
 

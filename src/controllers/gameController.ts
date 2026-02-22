@@ -1,8 +1,10 @@
-import type { SessionMeta } from '../types';
+import type { LogAction, OperationType, SessionMeta } from '../types';
 import type { GameState, Language, MoveResult, Placement, Tile } from '../core/types';
 import { ScrabbleGame, type WordChecker } from '../core/game';
 import { reconcileOrder, shuffleCopy } from '../ui/rackOrder';
 import { hasWord } from '../dictionary/dictionaryService';
+import { appendLogEntry } from '../storage/indexedDb';
+import { buildSyncStateForPeer, computeStateHash } from '../utils/syncState';
 
 export class GameController {
     private game: ScrabbleGame;
@@ -227,13 +229,22 @@ export class GameController {
                 meta.localPlayerId,
                 this.placements,
                 buildWordChecker(),
-                meta.minWordLength
+                meta.minWordLength,
+                meta
             );
             if (!result.success) {
                 this.reportError(result.message ?? 'Invalid move');
                 return false;
             }
             this.currentState = this.game.getState();
+            this.refreshLocalStateHash();
+            void this.logAction(this.currentState.sessionId, meta.localPlayerId, 'MOVE', {
+                placements: this.placements.map((placement) => ({
+                    x: placement.x,
+                    y: placement.y,
+                    tile: { ...placement.tile }
+                }))
+            });
             this.placements = [];
             if (meta.timerEnabled) meta.turnDeadline = null;
             this.updateValidation();
@@ -255,13 +266,22 @@ export class GameController {
             playerId,
             placements,
             buildWordChecker(),
-            meta.minWordLength
+            meta.minWordLength,
+            meta
         );
         if (!result.success) {
             this.reportError(result.message ?? 'Invalid move');
             return false;
         }
         this.currentState = this.game.getState();
+        this.refreshLocalStateHash();
+        void this.logAction(this.currentState.sessionId, playerId, 'MOVE', {
+            placements: placements.map((placement) => ({
+                x: placement.x,
+                y: placement.y,
+                tile: { ...placement.tile }
+            }))
+        });
         if (meta.timerEnabled) meta.turnDeadline = null;
         this.updateValidation();
         this.onRenderAll();
@@ -278,12 +298,14 @@ export class GameController {
 
         if (meta.isHost || meta.mode === 'solo') {
             const pid = actingPlayerId ?? meta.localPlayerId;
-            const result = this.game.passTurn(pid);
+            const result = this.game.passTurn(pid, meta);
             if (!result.success) {
                 this.reportError(result.message ?? 'Cannot pass');
                 return false;
             }
             this.currentState = this.game.getState();
+            this.refreshLocalStateHash();
+            void this.logAction(this.currentState.sessionId, pid, 'PASS');
             if (meta.timerEnabled) meta.turnDeadline = null;
             this.onRenderAll();
             void this.onPersist();
@@ -301,12 +323,16 @@ export class GameController {
 
         if (meta.isHost || meta.mode === 'solo') {
             const pid = actingPlayerId ?? meta.localPlayerId;
-            const result = this.game.exchangeTiles(pid, tileIds);
+            const result = this.game.exchangeTiles(pid, tileIds, meta);
             if (!result.success) {
                 this.reportError(result.message ?? 'Exchange rejected');
                 return false;
             }
             this.currentState = this.game.getState();
+            this.refreshLocalStateHash();
+            void this.logAction(this.currentState.sessionId, pid, 'EXCHANGE', {
+                tileIds: [...tileIds]
+            });
             this.placements = [];
             this.selectedTileId = null;
             if (meta.timerEnabled) meta.turnDeadline = null;
@@ -338,10 +364,12 @@ export class GameController {
         try {
             this.remoteDraft = null;
             const timedOutPlayerId = state.currentPlayer;
-            const result = this.game.passTurn(timedOutPlayerId);
+            const result = this.game.passTurn(timedOutPlayerId, meta);
             if (!result.success) return;
 
             this.currentState = this.game.getState();
+            this.refreshLocalStateHash();
+            void this.logAction(this.currentState.sessionId, timedOutPlayerId, 'PASS');
             meta.lastTurnEvent = {
                 type: 'timeout',
                 playerId: timedOutPlayerId,
@@ -375,6 +403,17 @@ export class GameController {
             this.onSync();
         }
         this.onGameEnd();
+    }
+
+    private logAction(sessionId: string, playerId: string, type: OperationType, action: LogAction = {}): void {
+        void appendLogEntry({ sessionId, playerId, type, action });
+    }
+
+    private refreshLocalStateHash(): void {
+        const state = this.currentState;
+        const meta = this.meta;
+        if (!state || !meta) return;
+        meta.stateHash = computeStateHash(buildSyncStateForPeer(state, meta));
     }
 
     private reportError(message: string): void {
