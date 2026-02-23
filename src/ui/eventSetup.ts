@@ -330,4 +330,23 @@ export function setupEvents(app: App, session: SessionManager): void {
   });
   uiElements.rematchBtnOverlay.addEventListener('click', () => void session.requestRematch());
   uiElements.rematchBtnBanner.addEventListener('click', () => void session.requestRematch());
+
+  const boardScrollEl = uiElements.boardEl.closest<HTMLElement>('.board-scroll');
+  if (boardScrollEl) {
+    const centerBoardOnMobile = (): void => {
+      const isMobileViewport =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 640px)').matches;
+      if (!isMobileViewport) {
+        boardScrollEl.scrollLeft = 0;
+        return;
+      }
+      const maxScroll = boardScrollEl.scrollWidth - boardScrollEl.clientWidth;
+      if (maxScroll <= 0) return;
+      boardScrollEl.scrollLeft = Math.floor(maxScroll / 2);
+    };
+
+    centerBoardOnMobile();
+    window.addEventListener('resize', centerBoardOnMobile);
+  }
 }
