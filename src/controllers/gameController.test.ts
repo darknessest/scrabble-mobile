@@ -3,6 +3,7 @@ import { GameController } from './gameController';
 import type { Placement } from '../core/types';
 import type { SessionMeta } from '../types';
 import { appendLogEntry } from '../storage/indexedDb';
+import { hasWord } from '../dictionary/dictionaryService';
 import { computeStateHash } from '../utils/syncState';
 
 vi.mock('../storage/indexedDb', () => ({
@@ -478,6 +479,60 @@ describe('setRemoteDraft', () => {
 describe('validation', () => {
   it('starts idle', () => {
     expect(gc.getValidationStatus()).toBe('idle');
+    expect(gc.getValidationMessage()).toBeNull();
+  });
+
+  it('emits checking then valid for a valid latest draft', async () => {
+    const state = gc.start('en', ['p1']);
+    gc.setMeta({
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId
+    });
+
+    const transitions: string[] = [];
+    gc.setOnValidationUpdate(() => {
+      transitions.push(gc.getValidationStatus());
+    });
+
+    (gc as unknown as { placements: Placement[] }).placements = [
+      { x: 7, y: 7, tile: state.racks.p1[0] },
+      { x: 8, y: 7, tile: state.racks.p1[1] }
+    ];
+
+    await gc.updateValidation();
+
+    expect(transitions).toEqual(['checking', 'valid']);
+    expect(gc.getValidationStatus()).toBe('valid');
+    expect(gc.getValidationMessage()).toBeNull();
+  });
+
+  it('clears stale invalid message after subsequent valid draft', async () => {
+    const mockedHasWord = vi.mocked(hasWord);
+    const state = gc.start('en', ['p1']);
+    gc.setMeta({
+      mode: 'solo',
+      language: 'en',
+      isHost: true,
+      localPlayerId: 'p1',
+      sessionId: state.sessionId
+    });
+
+    (gc as unknown as { placements: Placement[] }).placements = [
+      { x: 7, y: 7, tile: state.racks.p1[0] },
+      { x: 8, y: 7, tile: state.racks.p1[1] }
+    ];
+
+    mockedHasWord.mockResolvedValueOnce(false);
+    await gc.updateValidation();
+    expect(gc.getValidationStatus()).toBe('invalid');
+    expect(gc.getValidationMessage()).toMatch(/Invalid word:/i);
+
+    mockedHasWord.mockResolvedValueOnce(true);
+    await gc.updateValidation();
+    expect(gc.getValidationStatus()).toBe('valid');
     expect(gc.getValidationMessage()).toBeNull();
   });
 });

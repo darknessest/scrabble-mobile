@@ -194,6 +194,41 @@ describe('ScrabbleGame', () => {
         expect(game.getState().scores['p1']).toBe(10);
     });
 
+    it('returns highlightCells including existing connector tiles', async () => {
+        game.start('en', ['p1', 'p2']);
+
+        withState((state) => {
+            state.racks['p1'][0] = { id: 'p1-h', letter: 'H', value: 4 };
+        });
+        let state = game.getState();
+        await game.placeMove('p1', [{ x: 7, y: 7, tile: state.racks['p1'][0] }], mockCheckWord);
+        game.passTurn('p2');
+
+        withState((nextState) => {
+            nextState.racks['p1'][0] = { id: 'p1-a', letter: 'A', value: 1 };
+            nextState.racks['p1'][1] = { id: 'p1-i', letter: 'I', value: 1 };
+        });
+        state = game.getState();
+
+        const result = await game.placeMove(
+            'p1',
+            [
+                { x: 6, y: 7, tile: state.racks['p1'][0] },
+                { x: 8, y: 7, tile: state.racks['p1'][1] }
+            ],
+            mockCheckWord
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.highlightCells).toEqual(
+            expect.arrayContaining([
+                { x: 6, y: 7 },
+                { x: 7, y: 7 },
+                { x: 8, y: 7 }
+            ])
+        );
+    });
+
     it('advances turn after move', async () => {
         game.start('en', ['p1', 'p2']);
         const state = game.getState();

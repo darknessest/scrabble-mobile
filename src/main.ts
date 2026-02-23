@@ -78,6 +78,8 @@ function updateValidationUI(): void {
     uiElements.wordCheckStatus.style.display = '';
     uiElements.wordLengthStatus.style.display = 'none';
   } else if (validationStatus === 'valid') {
+    uiElements.wordCheckStatus.textContent = 'Valid';
+    uiElements.wordCheckStatus.classList.add('active');
     uiElements.wordCheckStatus.style.display = '';
     uiElements.wordLengthStatus.style.display = 'none';
   } else if (validationStatus === 'invalid') {
@@ -121,8 +123,9 @@ function doRender(): void {
   const selectedTileId = gameController.getSelectedTileId();
   const remoteDraft = gameController.getRemoteDraft();
   const validationStatus = gameController.getValidationStatus();
+  const validationHighlightCells = gameController.getValidationHighlightCells();
   gameController.syncLocalRackOrder();
-  renderBoard(uiElements.boardEl, uiElements.turnIndicator, gameState, state.meta, placements, validationStatus, remoteDraft, state.labels);
+  renderBoard(uiElements.boardEl, uiElements.turnIndicator, gameState, state.meta, placements, validationStatus, validationHighlightCells, remoteDraft, state.labels);
   renderRack(uiElements.rackEl, uiElements.rackOwnerEl, gameState, state.meta, placements, selectedTileId, gameController.getRackOrder(), gameController.syncLocalRackOrder.bind(gameController), state.labels);
   renderScores(uiElements.scoresEl, gameState, state.labels);
   renderStats(uiElements.bagCountEl, uiElements.moveHistoryEl, gameState, state.labels);

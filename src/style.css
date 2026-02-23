@@ -258,6 +258,7 @@ h3 {
   
   .rack-card {
     grid-column: span 1;
+    align-self: start;
   }
   
   .info-card {
@@ -1142,6 +1143,10 @@ button.danger:hover {
   transition: all var(--transition-fast);
   position: relative;
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .tile:hover {
@@ -1468,7 +1473,10 @@ button.danger:hover {
    ===================================================== */
 @media (max-width: 640px) {
   #app {
-    padding: 0.5rem;
+    padding: calc(0.4rem + var(--safe-area-top))
+      calc(0.25rem + var(--safe-area-right))
+      calc(0.45rem + var(--safe-area-bottom))
+      calc(0.25rem + var(--safe-area-left));
   }
   
   .cards {
@@ -1480,7 +1488,7 @@ button.danger:hover {
   }
   
   .board-bleed {
-    padding: 0.65rem 0.9rem 0.9rem;
+    padding: 0.45rem 0.35rem 0.7rem;
   }
 
   .board-bleed .card-head {
@@ -1496,7 +1504,7 @@ button.danger:hover {
   .board {
     gap: 1px;
     padding: 3px;
-    width: 100%;
+    width: calc(100vw - 0.7rem - var(--safe-area-left) - var(--safe-area-right));
     max-width: none;
   }
   
@@ -1516,6 +1524,18 @@ button.danger:hover {
   button {
     padding: 0.5rem 0.75rem;
     font-size: 0.8rem;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .tile.selected {
+    transform: none;
+    background: var(--tile-bg);
+    border-color: var(--accent-blue);
+    box-shadow:
+      0 0 0 2px var(--accent-blue),
+      inset 0 1px 0 rgba(255,255,255,0.4),
+      inset 0 -3px 0 var(--tile-shadow);
   }
 }
 

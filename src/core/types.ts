@@ -84,6 +84,6 @@ export interface MoveResult {
   message?: string;
   scoreDelta?: number;
   words?: string[];
+  highlightCells?: Array<{ x: number; y: number }>;
   gameEnded?: GameEndedInfo;
 }
-

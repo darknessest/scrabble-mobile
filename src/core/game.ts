@@ -196,7 +196,7 @@ export class ScrabbleGame {
       return { success: false, message: 'Tiles must form a contiguous line' };
     }
 
-    let scoreResult: { words: string[]; score: number };
+    let scoreResult: { words: string[]; score: number; highlightCells: Array<{ x: number; y: number }> };
     try {
       scoreResult = await computeScore(
         state.board,
@@ -250,17 +250,23 @@ export class ScrabbleGame {
     // Check "going out": rack empty with bag empty ends the game immediately
     if (state.bag.length === 0 && state.racks[playerId].length === 0) {
       this.applyEndGameScoring();
-      return {
-        success: true,
-        scoreDelta: scoreResult.score,
-        words: scoreResult.words,
-        gameEnded: { reason: 'rack_empty_bag_empty', finalScores: structuredClone(state.scores) }
-      };
+        return {
+          success: true,
+          scoreDelta: scoreResult.score,
+          words: scoreResult.words,
+          highlightCells: scoreResult.highlightCells,
+          gameEnded: { reason: 'rack_empty_bag_empty', finalScores: structuredClone(state.scores) }
+        };
     }
 
     // Expensive "no_moves_bag_empty" scan is handled by EndgameScanController worker flow.
     // Keep placeMove hot-path free of brute-force dictionary scanning.
-    return { success: true, scoreDelta: scoreResult.score, words: scoreResult.words };
+    return {
+      success: true,
+      scoreDelta: scoreResult.score,
+      words: scoreResult.words,
+      highlightCells: scoreResult.highlightCells
+    };
   }
 
   passTurn(playerId: string, meta?: SessionMeta): MoveResult {
@@ -603,7 +609,7 @@ async function computeScore(
   language: Language,
   checkWord: WordChecker,
   minWordLength?: number
-): Promise<{ words: string[]; score: number }> {
+): Promise<{ words: string[]; score: number; highlightCells: Array<{ x: number; y: number }> }> {
   const tempBoard = board.map((row) => row.map((cell) => ({ ...cell })));
   placements.forEach((p) => {
     tempBoard[p.y][p.x].tile = p.tile;
@@ -631,7 +637,22 @@ async function computeScore(
   // Bingo bonus (using all 7 tiles) applies once per move, not per word.
   if (placementKeys.size === 7) totalScore += 50;
 
-  return { words: formedWords.map((w) => w.word), score: totalScore };
+  const highlightKeys = new Set<string>();
+  const highlightCells: Array<{ x: number; y: number }> = [];
+  for (const { cells } of formedWords) {
+    for (const cell of cells) {
+      const key = `${cell.x},${cell.y}`;
+      if (highlightKeys.has(key)) continue;
+      highlightKeys.add(key);
+      highlightCells.push({ x: cell.x, y: cell.y });
+    }
+  }
+
+  return {
+    words: formedWords.map((w) => w.word),
+    score: totalScore,
+    highlightCells
+  };
 }
 
 function collectFormedWords(

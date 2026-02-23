@@ -17,6 +17,7 @@ export class GameController {
     private rackOrderSessionId: string | null = null;
     private validationStatus: 'idle' | 'checking' | 'valid' | 'invalid' = 'idle';
     private validationMessage: string | null = null;
+    private validationHighlightCells: Array<{ x: number; y: number }> = [];
     private validationNonce = 0;
     private lastAutoPassToken: string | null = null;
     private autoPassInProgress = false;
@@ -81,6 +82,10 @@ export class GameController {
         return this.validationMessage;
     }
 
+    getValidationHighlightCells(): Array<{ x: number; y: number }> {
+        return this.validationHighlightCells;
+    }
+
     setOnValidationUpdate(callback: () => void): void {
         this.onValidationUpdate = callback;
     }
@@ -109,6 +114,7 @@ export class GameController {
         this.remoteDraft = null;
         this.rackOrder = [];
         this.rackOrderSessionId = state.sessionId;
+        this.validationHighlightCells = [];
         return state;
     }
 
@@ -120,6 +126,7 @@ export class GameController {
         this.remoteDraft = null;
         this.rackOrder = [];
         this.rackOrderSessionId = state.sessionId;
+        this.validationHighlightCells = [];
     }
 
     syncLocalRackOrder(): void {
@@ -481,19 +488,21 @@ export class GameController {
         this.validationNonce += 1;
         const ticket = this.validationNonce;
 
-        this.onValidationUpdate();
-
         const state = this.currentState;
         const meta = this.meta;
         if (!state || !meta || this.placements.length === 0) {
             this.validationStatus = 'idle';
             this.validationMessage = null;
+            this.validationHighlightCells = [];
+            this.onValidationUpdate();
             this.onRenderAll();
             return;
         }
 
         this.validationStatus = 'checking';
         this.validationMessage = null;
+        this.validationHighlightCells = [];
+        this.onValidationUpdate();
         this.onRenderAll();
 
         const preview = new ScrabbleGame();
@@ -510,6 +519,10 @@ export class GameController {
 
         this.validationStatus = result.success ? 'valid' : 'invalid';
         this.validationMessage = result.success ? null : (result.message ?? null);
+        this.validationHighlightCells = result.success
+            ? [...(result.highlightCells ?? this.placements.map((placement) => ({ x: placement.x, y: placement.y })))]
+            : [];
+        this.onValidationUpdate();
         this.onRenderAll();
     }
 
@@ -521,6 +534,7 @@ export class GameController {
         this.remoteDraft = null;
         this.rackOrder = [];
         this.rackOrderSessionId = state.sessionId;
+        this.validationHighlightCells = [];
         return state;
     }
 }

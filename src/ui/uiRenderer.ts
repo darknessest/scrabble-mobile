@@ -224,6 +224,7 @@ export function renderBoard(
     meta: SessionMeta | null,
     placements: Placement[],
     validationStatus: ValidationStatus,
+    validationHighlightCells: Array<{ x: number; y: number }>,
     remoteDraft: { playerId: string; placements: Placement[]; moveNumber: number } | null,
     labels: Record<string, string>
 ): void {
@@ -248,6 +249,9 @@ export function renderBoard(
     boardEl.setAttribute('aria-label', 'Game board');
 
     const placementKeys = new Set(placements.map((p) => `${p.x},${p.y}`));
+    const validationHighlightKeys = new Set(
+        validationHighlightCells.map((cell) => `${cell.x},${cell.y}`)
+    );
     const lastMoveKeys = new Set((state.lastMove?.placed ?? []).map((p) => `${p.x},${p.y}`));
     const ghostPlacements =
         remoteDraft &&
@@ -268,11 +272,14 @@ export function renderBoard(
             const isNew = placementKeys.has(`${x},${y}`);
             const isGhost = !isNew && ghostKeys.has(`${x},${y}`) && !state.board[y][x].tile;
             const isLastMove = !isNew && lastMoveKeys.has(`${x},${y}`);
+            const isValidationHighlighted =
+                validationStatus === 'valid' && validationHighlightKeys.has(`${x},${y}`);
+            const isPending = isNew || isValidationHighlighted;
             const validationClass =
-                isNew && validationStatus === 'valid'
+                isPending && validationStatus === 'valid'
                     ? 'valid'
-                    : isNew && validationStatus === 'invalid'
-                        ? 'invalid'
+                : isNew && validationStatus === 'invalid'
+                    ? 'invalid'
                         : isNew && validationStatus === 'checking'
                             ? 'checking'
                             : '';
@@ -283,7 +290,7 @@ export function renderBoard(
             const classes = [
                 'cell',
                 premium,
-                isNew ? 'pending' : '',
+                isPending ? 'pending' : '',
                 isGhost ? 'remote-draft' : '',
                 isLastMove ? 'last-move' : '',
                 validationClass
@@ -294,7 +301,7 @@ export function renderBoard(
             if (tile) parts.push(`${tile.letter} (${tile.value})`);
             else if (premium) parts.push(PREMIUM_LABELS[premium] ?? '');
             else parts.push('Empty');
-            if (isNew) parts.push('pending');
+            if (isPending) parts.push('pending');
             if (isLastMove) parts.push('last move');
             const cellLabel = parts.filter(Boolean).join(', ');
             cells.push(
