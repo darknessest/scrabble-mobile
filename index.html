@@ -27,12 +27,12 @@
           <div class="stack top-controls">
             <div class="status-row">
               <span id="offline-status" class="pill"><span class="status-dot"></span>...</span>
-              <span id="dict-status" class="pill">Dictionaries: checking...</span>
-              <span id="p2p-status" class="pill">P2P: idle</span>
+              <span id="dict-status" class="pill">Dict: &hellip;</span>
+              <span id="p2p-status" class="pill">P2P: &hellip;</span>
             </div>
             <div class="row gap wrap">
-              <button id="force-reload" class="ghost">Update Game</button>
-              <button id="toggle-setup" class="ghost">Hide setup</button>
+              <button id="force-reload" class="ghost">Update</button>
+              <button id="toggle-setup" class="ghost" aria-pressed="false">Setup</button>
             </div>
           </div>
         </header>
@@ -107,7 +107,7 @@
                 <p class="hint">Host/solo only; shared with peers. When time runs out, the turn auto-passes.</p>
               </div>
             </div>
-            <div class="row gap">
+            <div class="row gap wrap">
               <button id="start-btn" class="primary">Start</button>
               <button id="resume-btn" class="ghost" disabled>Resume saved</button>
               <button id="clear-snapshot" class="ghost danger" disabled>Forget saved</button>
@@ -176,7 +176,7 @@
           <div class="card board-card board-bleed">
             <div class="card-head">
               <h3>Board</h3>
-              <div class="row gap">
+              <div class="row gap wrap">
                 <span class="label">Turn:</span>
                 <span id="turn-indicator" class="pill" aria-live="polite"></span>
                 <span id="timer-display" class="pill timer-pill" aria-live="off">
@@ -244,11 +244,11 @@
             </div>
             <div id="rack" class="rack"></div>
             <div class="row wrap gap">
-              <button id="confirm-move" class="primary">Confirm move</button>
-              <button id="clear-placements" class="ghost">Clear placements</button>
+              <button id="confirm-move" class="primary">Confirm</button>
+              <button id="clear-placements" class="ghost">Clear</button>
               <button id="mix-rack" class="ghost" title="Shuffle your rack tiles">Mix</button>
               <button id="pass-btn" class="ghost">Pass</button>
-              <button id="exchange-btn" class="ghost">Exchange tiles</button>
+              <button id="exchange-btn" class="ghost">Exchange</button>
             </div>
           </div>
 
@@ -256,8 +256,8 @@
             <div class="card-head">
               <h3>Scores &amp; Status</h3>
               <div class="row gap wrap">
-                <button id="toggle-logs" class="ghost">Hide logs</button>
-                <button id="request-sync" class="ghost">Request sync</button>
+                <button id="toggle-logs" class="ghost" aria-pressed="false">Logs</button>
+                <button id="request-sync" class="ghost">Sync</button>
               </div>
             </div>
             <div id="scores"></div>
@@ -272,7 +272,7 @@
               <span class="hint">Optional</span>
             </div>
             <details id="stats-details" class="stats-details">
-              <summary>Show</summary>
+              <summary>Stats</summary>
               <div class="stats-row">
                 <span class="label">Letters left in bag</span>
                 <strong id="bag-count" class="bag-count"></strong>

@@ -31,3 +31,6 @@ scripts/data/*.csv
 public/dicts/*.json.gz
 # Keep uncompressed dictionaries in public/dicts/*.json for local development
 .dev-assets/
+
+# Local QA screenshots
+qa-*.png

@@ -192,14 +192,14 @@ export function setupEvents(app: App, session: SessionManager): void {
     additional.dictEnIcon.textContent = '\u23F3';
     additional.dictRuIcon.textContent = '\u23F3';
     additional.dictRuStrictIcon.textContent = '\u23F3';
-    uiElements.dictStatus.textContent = 'Dictionaries: checking...';
+    uiElements.dictStatus.textContent = 'Dict: \u23F3';
     try {
       await dictionaryController.refreshDictStatus();
     } catch (err) {
       additional.dictEnIcon.textContent = '\u274C';
       additional.dictRuIcon.textContent = '\u274C';
       additional.dictRuStrictIcon.textContent = '\u274C';
-      uiElements.dictStatus.textContent = 'Dictionaries: check failed';
+      uiElements.dictStatus.textContent = 'Dict: failed';
       uiElements.dictStatus.classList.add('danger');
       app.appendLog(`Dictionary status check failed: ${String(err)}`);
     }

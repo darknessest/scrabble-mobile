@@ -211,7 +211,7 @@ export class NetworkController {
         this.hostApplyAnswer = apply;
         this.offerText.value = offer;
         this.offerQr.src = await toQrDataUrl(offer);
-        this.p2pStatus.textContent = 'Offer created - waiting for answer';
+        this.p2pStatus.textContent = 'Offer ready';
         this.p2pStatus.className = 'pill';
         this.appendLog('Offer created. Share this code/QR, then paste the answer you get back.');
     }
@@ -227,7 +227,7 @@ export class NetworkController {
             return;
         }
         await this.hostApplyAnswer(answer);
-        this.p2pStatus.textContent = 'Connecting...';
+        this.p2pStatus.textContent = 'Connecting';
         this.p2pStatus.className = 'pill';
         this.appendLog('Answer applied. Waiting for data channel to open.');
     }
@@ -252,7 +252,7 @@ export class NetworkController {
         this.connection = conn;
         this.clientAnswer.value = answer;
         this.answerQr.src = await toQrDataUrl(answer);
-        this.p2pStatus.textContent = 'Answer ready - share with host';
+        this.p2pStatus.textContent = 'Answer ready';
         this.p2pStatus.className = 'pill';
         this.appendLog('Answer created. Share this code/QR back to the host.');
     }
@@ -414,8 +414,8 @@ export class NetworkController {
     private handleDisconnect(): void {
         if (!this.connection) return;
 
-        if (this.p2pStatus.textContent === 'Connection lost') return;
-        this.p2pStatus.textContent = 'Connection lost';
+        if (this.p2pStatus.textContent === 'Lost') return;
+        this.p2pStatus.textContent = 'Lost';
         this.p2pStatus.className = 'pill danger';
         this.appendLog('P2P connection lost or failed.');
 

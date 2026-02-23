@@ -211,10 +211,18 @@ export function renderVisibility(
     settingsSection.setAttribute('aria-hidden', settingsHidden ? 'true' : 'false');
     logEl.style.display = logsHidden ? 'none' : '';
     logEl.setAttribute('aria-hidden', logsHidden ? 'true' : 'false');
-    toggleSetupBtn.textContent = settingsHidden ? 'Show setup' : 'Hide setup';
-    toggleSetupBtn.setAttribute('aria-pressed', settingsHidden ? 'true' : 'false');
-    toggleLogsBtn.textContent = logsHidden ? 'Show logs' : 'Hide logs';
-    toggleLogsBtn.setAttribute('aria-pressed', logsHidden ? 'true' : 'false');
+
+    const setupLabel = settingsHidden ? 'Show setup' : 'Hide setup';
+    toggleSetupBtn.textContent = 'Setup';
+    toggleSetupBtn.title = setupLabel;
+    toggleSetupBtn.setAttribute('aria-label', setupLabel);
+    toggleSetupBtn.setAttribute('aria-pressed', String(!settingsHidden));
+
+    const logsLabel = logsHidden ? 'Show logs' : 'Hide logs';
+    toggleLogsBtn.textContent = 'Logs';
+    toggleLogsBtn.title = logsLabel;
+    toggleLogsBtn.setAttribute('aria-label', logsLabel);
+    toggleLogsBtn.setAttribute('aria-pressed', String(!logsHidden));
 }
 
 export function renderBoard(

@@ -165,7 +165,7 @@ describe('NetworkController.buildHostOffer', () => {
   it('sets p2pStatus text and class to the waiting-for-answer state', async () => {
     await setupHostWithConnection();
 
-    expect(p2pStatus.textContent).toBe('Offer created - waiting for answer');
+    expect(p2pStatus.textContent).toBe('Offer ready');
     expect(p2pStatus.className).toBe('pill');
   });
 
@@ -236,7 +236,7 @@ describe('NetworkController.applyHostAnswer', () => {
 
     await nc.applyHostAnswer();
 
-    expect(p2pStatus.textContent).toBe('Connecting...');
+    expect(p2pStatus.textContent).toBe('Connecting');
     expect(appendLog).toHaveBeenCalledWith(expect.stringContaining('Answer applied'));
   });
 });
@@ -273,7 +273,7 @@ describe('NetworkController.buildClientAnswer', () => {
 
     await nc.buildClientAnswer();
 
-    expect(p2pStatus.textContent).toBe('Answer ready - share with host');
+    expect(p2pStatus.textContent).toBe('Answer ready');
     expect(appendLog).toHaveBeenCalledWith(expect.stringContaining('Answer created'));
   });
 
@@ -480,7 +480,7 @@ describe('Connection open callback (onOpen)', () => {
 // ─── Connection close / disconnect handling ───────────────────────────────────
 
 describe('Connection close and disconnect handling', () => {
-  it('sets p2pStatus to "Connection lost" with danger class', async () => {
+  it('sets p2pStatus to "Lost" with danger class', async () => {
     nc.setMode('host');
     nc.setMeta(makeFakeMeta());
     nc.setCurrentState(makeFakeGameState());
@@ -489,7 +489,7 @@ describe('Connection close and disconnect handling', () => {
 
     capturedCallbacks.onClose!();
 
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
     expect(p2pStatus.className).toBe('pill danger');
   });
 
@@ -625,25 +625,25 @@ describe('Connection state change callback (onConnectionStateChange)', () => {
   it('"failed" state triggers handleDisconnect', async () => {
     await setupWithReconnectSpy();
     capturedCallbacks.onConnectionStateChange!('failed');
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
   });
 
   it('"disconnected" state triggers handleDisconnect', async () => {
     await setupWithReconnectSpy();
     capturedCallbacks.onConnectionStateChange!('disconnected');
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
   });
 
   it('"closed" state triggers handleDisconnect', async () => {
     await setupWithReconnectSpy();
     capturedCallbacks.onConnectionStateChange!('closed');
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
   });
 
   it('"connected" state does NOT trigger handleDisconnect', async () => {
     await setupWithReconnectSpy();
     capturedCallbacks.onConnectionStateChange!('connected');
-    expect(p2pStatus.textContent).not.toBe('Connection lost');
+    expect(p2pStatus.textContent).not.toBe('Lost');
   });
 
   it('calls the registered onConnectionStateChange callback', async () => {
@@ -769,7 +769,7 @@ describe('NetworkController.triggerReconnect', () => {
       await reconnectPromise;
 
       expect(mockCreateHost).toHaveBeenCalledTimes(2);
-      expect(p2pStatus.textContent).toBe('Offer created - waiting for answer');
+      expect(p2pStatus.textContent).toBe('Offer ready');
       expect(disconnectMessage.textContent).toContain('New offer ready');
     } finally {
       vi.useRealTimers();
@@ -919,12 +919,12 @@ describe('P2P status indicator — full happy-path state machine', () => {
     nc.setMeta(makeFakeMeta());
     nc.setCurrentState(makeFakeGameState());
     await nc.buildHostOffer(makeLanguageSelect(), vi.fn().mockResolvedValue(undefined));
-    expect(p2pStatus.textContent).toBe('Offer created - waiting for answer');
+    expect(p2pStatus.textContent).toBe('Offer ready');
 
     // Stage 3: answer applied → Connecting
     answerText.value = 'answer-token';
     await nc.applyHostAnswer();
-    expect(p2pStatus.textContent).toBe('Connecting...');
+    expect(p2pStatus.textContent).toBe('Connecting');
 
     // Stage 4: data channel opens → Connected
     capturedCallbacks.onOpen!();
@@ -934,7 +934,7 @@ describe('P2P status indicator — full happy-path state machine', () => {
     // Stage 5: connection drops → Connection lost
     vi.spyOn(nc, 'triggerReconnect').mockResolvedValue(undefined);
     capturedCallbacks.onClose!();
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
     expect(p2pStatus.className).toBe('pill danger');
   });
 
@@ -946,7 +946,7 @@ describe('P2P status indicator — full happy-path state machine', () => {
     nc.setMode('client');
     hostOfferInput.value = 'host-offer';
     await nc.buildClientAnswer();
-    expect(p2pStatus.textContent).toBe('Answer ready - share with host');
+    expect(p2pStatus.textContent).toBe('Answer ready');
 
     // Stage 3: data channel opens → Connected
     capturedCallbacks.onOpen!();
@@ -957,7 +957,7 @@ describe('P2P status indicator — full happy-path state machine', () => {
     nc.setCurrentState(makeFakeGameState());
     vi.spyOn(nc, 'triggerReconnect').mockResolvedValue(undefined);
     capturedCallbacks.onClose!();
-    expect(p2pStatus.textContent).toBe('Connection lost');
+    expect(p2pStatus.textContent).toBe('Lost');
   });
 });
 
