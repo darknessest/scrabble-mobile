@@ -191,20 +191,6 @@ body {
   gap: 0.75rem;
 }
 
-.brand {
-  display: flex;
-  flex-direction: column;
-}
-
-.eyebrow {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  color: var(--accent-blue);
-  margin-bottom: 0.25rem;
-}
-
 /* Status dot indicator */
 .status-dot {
   display: inline-block;
@@ -226,21 +212,6 @@ body {
   50% { opacity: 0.5; }
 }
 
-h1 {
-  font-family: var(--font-heading);
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  color: var(--text-primary);
-  text-shadow: 0 1px 0 rgba(24, 15, 9, 0.28);
-}
-
-@media (min-width: 640px) {
-  h1 {
-    font-size: 2.25rem;
-  }
-}
-
 h3 {
   font-family: var(--font-heading);
   font-size: 1rem;
@@ -254,6 +225,15 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.top-row {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.top-actions {
+  justify-content: flex-end;
 }
 
 .pill {
@@ -1611,6 +1591,16 @@ button.danger:hover {
   animation: slideDown 0.3s ease-out;
 }
 
+.app-footer {
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0 calc(0.5rem + var(--safe-area-bottom));
+}
+
+.app-footer .version {
+  opacity: 0.75;
+}
+
 @keyframes slideDown {
   from {
     opacity: 0;
@@ -1643,21 +1633,25 @@ button.danger:hover {
     gap: 0.65rem;
   }
 
-  .eyebrow,
-  #app-version {
-    display: none;
-  }
-
-  h1 {
-    font-size: 1.35rem;
-  }
-
   .top-controls {
     gap: 0.5rem;
   }
 
   .status-row {
     gap: 0.35rem;
+  }
+
+  .top-row {
+    row-gap: 0.5rem;
+  }
+
+  .top-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .top-actions button {
+    flex: 1;
   }
 
   .pill {

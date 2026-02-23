@@ -19,20 +19,18 @@
     <div id="app">
       <div class="shell">
         <header class="top">
-          <div class="brand">
-            <p class="eyebrow">Mobile-first &bull; Offline &bull; P2P</p>
-            <h1>Scrabble PWA</h1>
-            <p id="app-version" class="hint version"></p>
-          </div>
+          <h1 class="sr-only">Scrabble PWA</h1>
           <div class="stack top-controls">
-            <div class="status-row">
-              <span id="offline-status" class="pill"><span class="status-dot"></span>...</span>
-              <span id="dict-status" class="pill">Dict: &hellip;</span>
-              <span id="p2p-status" class="pill">P2P: &hellip;</span>
-            </div>
-            <div class="row gap wrap">
-              <button id="force-reload" class="ghost">Update</button>
-              <button id="toggle-setup" class="ghost" aria-pressed="false">Setup</button>
+            <div class="row wrap gap top-row">
+              <div class="status-row">
+                <span id="offline-status" class="pill"><span class="status-dot"></span>...</span>
+                <span id="dict-status" class="pill">Dict: &hellip;</span>
+                <span id="p2p-status" class="pill">P2P: &hellip;</span>
+              </div>
+              <div class="row gap wrap top-actions">
+                <button id="toggle-setup" class="ghost" aria-pressed="false">Setup</button>
+                <button id="force-reload" class="ghost">Update</button>
+              </div>
             </div>
           </div>
         </header>
@@ -281,6 +279,9 @@
             </details>
           </div>
         </section>
+        <footer class="app-footer" aria-label="App info">
+          <p id="app-version" class="hint version"></p>
+        </footer>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
