@@ -376,3 +376,105 @@ describe('operationLog storage', () => {
     expect(fakeIndexedDb.getStoreData('scrabble-pwa', 'operationLog')).toBeDefined();
   });
 });
+
+describe('snapshot storage', () => {
+  it('stores session snapshots and lists them', async () => {
+    const storage = await loadStorageModule();
+    const payload = { foo: 'bar' };
+
+    const key = await storage.saveSessionSnapshot('session-a', payload);
+    const snapshots = await storage.listSnapshots('session-a');
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].key).toBe(key);
+    expect(snapshots[0].savedAt).toBeGreaterThan(0);
+
+    const stored = await storage.loadSnapshot<{ foo: string }>(key);
+    expect(stored).toEqual(payload);
+  });
+
+  it('prunes older snapshots beyond the retention limit', async () => {
+    const storage = await loadStorageModule();
+    const nowSpy = vi.spyOn(Date, 'now');
+    let counter = 0;
+    nowSpy.mockImplementation(() => counter++);
+
+    const recordedKeys: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const key = await storage.saveSessionSnapshot('session-b', { iteration: i });
+      recordedKeys.push(key);
+    }
+
+    nowSpy.mockRestore();
+
+    const snapshots = await storage.listSnapshots('session-b');
+
+    expect(snapshots).toHaveLength(5);
+    expect(snapshots.map((item) => item.key)).toEqual(recordedKeys.slice(-5).reverse());
+    expect(snapshots.every((item, index) =>
+      index === snapshots.length - 1 ? true : item.savedAt >= snapshots[index + 1].savedAt
+    )).toBe(true);
+  });
+
+  it('deletes snapshots by key', async () => {
+    const storage = await loadStorageModule();
+    const key = await storage.saveSessionSnapshot('session-c', { shouldDelete: true });
+
+    await storage.deleteSnapshot(key);
+
+    const snapshots = await storage.listSnapshots('session-c');
+    expect(snapshots).toHaveLength(0);
+    const loaded = await storage.loadSnapshot(key);
+    expect(loaded).toBeNull();
+  });
+
+  it('stores schemaVersion and checksum with snapshots', async () => {
+    const storage = await loadStorageModule();
+    const key = await storage.saveSessionSnapshot('session-meta', { value: 1 });
+
+    const store = fakeIndexedDb.getStoreData('scrabble-pwa', 'snapshots');
+    const record = store?.records.get(key) as
+      | { schemaVersion?: number; checksum?: string }
+      | undefined;
+
+    expect(record?.schemaVersion).toBe(3);
+    expect(record?.checksum).toEqual(expect.any(String));
+    expect(record?.checksum?.length).toBe(8);
+  });
+
+  it('returns null and deletes corrupted snapshots', async () => {
+    const storage = await loadStorageModule();
+    const key = await storage.saveSessionSnapshot('session-corrupt', { value: 'ok' });
+
+    const store = fakeIndexedDb.getStoreData('scrabble-pwa', 'snapshots');
+    const record = store?.records.get(key) as
+      | { key: string; payload: unknown; savedAt: number; checksum: string; schemaVersion: number; sessionId?: string }
+      | undefined;
+
+    if (!record || !store) {
+      throw new Error('snapshot record missing');
+    }
+
+    store.records.set(key, { ...record, checksum: 'deadbeef' });
+
+    const loaded = await storage.loadSnapshot(key);
+    expect(loaded).toBeNull();
+
+    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+
+    const afterDelete = await storage.loadSnapshot(key);
+    expect(afterDelete).toBeNull();
+  });
+
+  it('loads latest valid snapshot when last-session is unavailable', async () => {
+    const storage = await loadStorageModule();
+    const key = await storage.saveSessionSnapshot('session-fallback', { turn: 9 });
+    await storage.deleteSnapshot('last-session');
+
+    const loaded = await storage.loadMostRecentSnapshot<{ turn: number }>();
+
+    expect(loaded).toEqual({ turn: 9 });
+    const snapshots = await storage.listSnapshots('session-fallback');
+    expect(snapshots[0]?.key).toBe(key);
+  });
+});

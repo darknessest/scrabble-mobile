@@ -2,19 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock indexedDb before importing StorageController
 vi.mock('../storage/indexedDb', () => ({
-  saveSnapshot: vi.fn(),
+  saveSessionSnapshot: vi.fn(),
   loadSnapshot: vi.fn(),
-  clearSnapshot: vi.fn()
+  loadMostRecentSnapshot: vi.fn(),
+  deleteSnapshot: vi.fn()
 }));
 
 import { StorageController } from './storageController';
-import { saveSnapshot, loadSnapshot, clearSnapshot } from '../storage/indexedDb';
+import { deleteSnapshot, loadMostRecentSnapshot, loadSnapshot, saveSessionSnapshot } from '../storage/indexedDb';
 import type { SnapshotPayload } from '../types';
 import type { GameState } from '../core/types';
 
-const mockedSave = vi.mocked(saveSnapshot);
+const mockedSave = vi.mocked(saveSessionSnapshot);
 const mockedLoad = vi.mocked(loadSnapshot);
-const mockedClear = vi.mocked(clearSnapshot);
+const mockedLoadMostRecent = vi.mocked(loadMostRecentSnapshot);
+const mockedClear = vi.mocked(deleteSnapshot);
 
 function makeBtn(): HTMLButtonElement {
   return { disabled: true } as unknown as HTMLButtonElement;
@@ -61,6 +63,7 @@ let ctrl: StorageController;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedLoadMostRecent.mockResolvedValue(null);
   resumeBtn = makeBtn();
   clearBtn = makeBtn();
   note = makeP();
@@ -69,14 +72,14 @@ beforeEach(() => {
 
 describe('persistSnapshot', () => {
   it('saves to indexedDb and enables buttons', async () => {
-    mockedSave.mockResolvedValue(undefined);
+    mockedSave.mockResolvedValue('s1:1');
     const state = makeFakeState();
     const meta = makeFakeSnapshot().meta;
     const labels = { p1: 'Alice' };
 
     await ctrl.persistSnapshot(state, meta, labels);
 
-    expect(mockedSave).toHaveBeenCalledWith('last-session', {
+    expect(mockedSave).toHaveBeenCalledWith('s1', {
       version: 1,
       state,
       meta,
@@ -111,6 +114,20 @@ describe('checkSavedSnapshot', () => {
     expect(note.textContent).toContain('solo');
   });
 
+  it('falls back to most recent snapshot when last-session is unavailable', async () => {
+    const snap = makeFakeSnapshot();
+    mockedLoad.mockResolvedValue(null);
+    mockedLoadMostRecent.mockResolvedValue(snap);
+
+    await ctrl.checkSavedSnapshot();
+
+    expect(mockedLoad).toHaveBeenCalledWith('last-session');
+    expect(mockedLoadMostRecent).toHaveBeenCalled();
+    expect(ctrl.getPendingSnapshot()).toBe(snap);
+    expect(resumeBtn.disabled).toBe(false);
+    expect(clearBtn.disabled).toBe(false);
+  });
+
   it('returns null when nothing is saved', async () => {
     mockedLoad.mockResolvedValue(null);
 
@@ -122,7 +139,7 @@ describe('checkSavedSnapshot', () => {
 
 describe('clearSavedSnapshot', () => {
   it('clears indexedDb and disables buttons', async () => {
-    mockedSave.mockResolvedValue(undefined);
+    mockedSave.mockResolvedValue('s1:2');
     mockedClear.mockResolvedValue(undefined);
 
     // Persist first to have something
@@ -145,7 +162,7 @@ describe('getPendingSnapshot', () => {
   });
 
   it('returns snapshot after persist', async () => {
-    mockedSave.mockResolvedValue(undefined);
+    mockedSave.mockResolvedValue('s1:3');
     const state = makeFakeState();
     const meta = makeFakeSnapshot().meta;
     await ctrl.persistSnapshot(state, meta, { p1: 'Alice' });
