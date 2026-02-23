@@ -1611,9 +1611,19 @@ button.danger:hover {
   .card {
     padding: 1rem;
   }
+
+  .board-card.board-bleed {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-radius: 0;
+  }
   
   .board-bleed {
     padding: 0.45rem 0.35rem 0.7rem;
+    background: transparent;
   }
 
   .board-bleed .card-head {
