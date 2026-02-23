@@ -62,9 +62,17 @@ export interface LogDeltaPayload {
 
 export interface SnapshotPayload {
     version?: number;
+    schemaVersion?: number;
+    checksum?: string;
     state: GameState;
     meta: SessionMeta;
     labels: Record<string, string>;
+}
+
+export interface SnapshotListItem {
+    key: string;
+    savedAt: number;
+    checksum?: string;
 }
 
 export type TurnEventType = 'timeout';

@@ -1,6 +1,6 @@
 import type { SessionMeta, SnapshotPayload } from '../types';
 import type { GameState } from '../core/types';
-import { clearSnapshot, loadSnapshot, saveSnapshot } from '../storage/indexedDb';
+import { deleteSnapshot, loadMostRecentSnapshot, loadSnapshot, saveSessionSnapshot } from '../storage/indexedDb';
 
 const SNAPSHOT_VERSION = 1;
 
@@ -32,7 +32,7 @@ export class StorageController {
             meta,
             labels
         };
-        await saveSnapshot('last-session', payload);
+        await saveSessionSnapshot(meta.sessionId, payload);
         this.pendingSnapshot = payload;
         this.resumeBtn.disabled = false;
         this.clearSnapshotBtn.disabled = false;
@@ -40,7 +40,9 @@ export class StorageController {
     }
 
     async checkSavedSnapshot(): Promise<void> {
-        const saved = await loadSnapshot<SnapshotPayload>('last-session');
+        const saved =
+            (await loadSnapshot<SnapshotPayload>('last-session')) ??
+            (await loadMostRecentSnapshot<SnapshotPayload>());
         this.pendingSnapshot = saved;
         if (saved) {
             this.resumeBtn.disabled = false;
@@ -54,7 +56,7 @@ export class StorageController {
     }
 
     async clearSavedSnapshot(): Promise<void> {
-        await clearSnapshot('last-session');
+        await deleteSnapshot('last-session');
         this.pendingSnapshot = null;
         this.resumeBtn.disabled = true;
         this.clearSnapshotBtn.disabled = true;

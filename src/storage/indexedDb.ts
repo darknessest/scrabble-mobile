@@ -1,15 +1,35 @@
+import type { LogEntry, SnapshotListItem } from '../types';
+import { computeChecksum } from '../utils/checksum';
 const DB_NAME = 'scrabble-pwa';
-import type { LogEntry } from '../types';
 
 const DB_VERSION = 3;
 const DICT_STORE = 'dictionaries';
 const SNAPSHOT_STORE = 'snapshots';
 const OPERATION_LOG_STORE = 'operationLog';
 const OPERATION_LOG_LIMIT = 1000;
+const LAST_SESSION_KEY = 'last-session';
+const SNAPSHOT_RETENTION = 5;
+const SNAPSHOT_KEY_SEPARATOR = ':';
+const SNAPSHOT_SCHEMA_VERSION = 3;
 let dbConnection: IDBDatabase | null = null;
 let openingDb: Promise<IDBDatabase> | null = null;
 
 type PersistedLogEntry = LogEntry & { id: string };
+type SnapshotRecord = {
+  key: string;
+  payload: unknown;
+  savedAt: number;
+  schemaVersion: number;
+  checksum: string;
+  sessionId?: string;
+};
+
+type LegacySnapshotRecord = {
+  key: string;
+  payload: unknown;
+  savedAt: number;
+  sessionId?: string;
+};
 
 function makeLogId(sessionId: string, seq: number): string {
   return `${sessionId}:${seq}`;
@@ -121,11 +141,70 @@ export async function loadDictionary(language: string): Promise<DictionaryData |
   });
 }
 
-export async function saveSnapshot(key: string, data: unknown) {
+function getSessionIdFromKey(key: string): string | undefined {
+  const lastSeparator = key.lastIndexOf(SNAPSHOT_KEY_SEPARATOR);
+  if (lastSeparator <= 0) {
+    return undefined;
+  }
+  const timestampPart = key.slice(lastSeparator + 1);
+  if (!timestampPart) {
+    return undefined;
+  }
+  const timestamp = Number(timestampPart);
+  if (Number.isNaN(timestamp)) {
+    return undefined;
+  }
+  return key.slice(0, lastSeparator);
+}
+
+function createSnapshotRecord(key: string, payload: unknown): SnapshotRecord {
+  const serializedPayload = JSON.stringify(payload);
+  return {
+    key,
+    payload,
+    savedAt: Date.now(),
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    checksum: computeChecksum(serializedPayload),
+    sessionId: getSessionIdFromKey(key)
+  };
+}
+
+function isSnapshotRecord(value: unknown): value is SnapshotRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'key' in value &&
+    'payload' in value &&
+    'savedAt' in value &&
+    'checksum' in value
+  );
+}
+
+function isLegacySnapshotRecord(value: unknown): value is LegacySnapshotRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'key' in value &&
+    'payload' in value &&
+    'savedAt' in value
+  );
+}
+
+function verifySnapshotRecord(record: SnapshotRecord): boolean {
+  const expectedChecksum = computeChecksum(JSON.stringify(record.payload));
+  return expectedChecksum === record.checksum;
+}
+
+function makeSessionSnapshotKey(sessionId: string, timestamp: number = Date.now()): string {
+  return `${sessionId}${SNAPSHOT_KEY_SEPARATOR}${timestamp}`;
+}
+
+export async function saveSnapshot(key: string, data: unknown): Promise<void> {
   const db = await openDb();
+  const record = createSnapshotRecord(key, data);
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(SNAPSHOT_STORE, 'readwrite');
-    tx.objectStore(SNAPSHOT_STORE).put(data, key);
+    tx.objectStore(SNAPSHOT_STORE).put(record, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -137,32 +216,135 @@ export async function loadSnapshot<T>(key: string): Promise<T | null> {
     const tx = db.transaction(SNAPSHOT_STORE, 'readonly');
     const req = tx.objectStore(SNAPSHOT_STORE).get(key);
     req.onsuccess = () => {
-      if (req.result) {
-        if (typeof req.result === 'string') {
-          try {
-            resolve(JSON.parse(req.result) as T);
-          } catch {
-            resolve(null);
-          }
-        } else {
-          resolve(req.result as T);
-        }
-      } else {
+      const stored = req.result;
+      if (!stored) {
         resolve(null);
+        return;
       }
+      if (isSnapshotRecord(stored)) {
+        if (typeof stored.schemaVersion === 'number' && stored.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
+          console.warn(
+            `[indexedDb] Snapshot schemaVersion mismatch for key ${key}: ` +
+            `expected ${SNAPSHOT_SCHEMA_VERSION}, got ${stored.schemaVersion}`
+          );
+        }
+        if (!verifySnapshotRecord(stored)) {
+          console.warn(`[indexedDb] Corrupted snapshot detected for key ${key}; deleting.`);
+          void deleteSnapshot(key);
+          resolve(null);
+          return;
+        }
+        resolve(stored.payload as T);
+        return;
+      }
+      if (isLegacySnapshotRecord(stored)) {
+        resolve(stored.payload as T);
+        return;
+      }
+      if (typeof stored === 'string') {
+        try {
+          resolve(JSON.parse(stored) as T);
+        } catch {
+          resolve(null);
+        }
+        return;
+      }
+      resolve(stored as T);
     };
     req.onerror = () => reject(req.error);
   });
 }
 
-export async function clearSnapshot(key: string) {
+export async function deleteSnapshot(key: string): Promise<void> {
   const db = await openDb();
-  return new Promise<void>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction(SNAPSHOT_STORE, 'readwrite');
     tx.objectStore(SNAPSHOT_STORE).delete(key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+}
+
+export async function clearSnapshot(key: string): Promise<void> {
+  return deleteSnapshot(key);
+}
+
+async function getSnapshotStoreRecords(): Promise<SnapshotRecord[]> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SNAPSHOT_STORE, 'readonly');
+    const req = tx.objectStore(SNAPSHOT_STORE).getAll();
+    req.onsuccess = () => {
+      const raw = req.result as unknown[];
+      const normalizedRecords = raw
+        .map((value) => {
+          if (isSnapshotRecord(value)) {
+            return value;
+          }
+          if (isLegacySnapshotRecord(value)) {
+            const migrated = createSnapshotRecord(value.key, value.payload);
+            migrated.savedAt = value.savedAt;
+            migrated.sessionId = value.sessionId;
+            return migrated;
+          }
+          return null;
+        })
+        .filter((record): record is SnapshotRecord => record !== null);
+      resolve(normalizedRecords);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function listSnapshots(sessionId: string): Promise<SnapshotListItem[]> {
+  const records = await getSnapshotStoreRecords();
+  return records
+    .filter((record) => record.sessionId === sessionId)
+    .map(({ key, savedAt, checksum }) => ({ key, savedAt, checksum }))
+    .sort((a, b) => b.savedAt - a.savedAt);
+}
+
+export async function loadMostRecentSnapshot<T>(): Promise<T | null> {
+  const records = await getSnapshotStoreRecords();
+  const candidates = records
+    .filter((record) => typeof record.sessionId === 'string')
+    .sort((a, b) => b.savedAt - a.savedAt);
+
+  for (const candidate of candidates) {
+    const loaded = await loadSnapshot<T>(candidate.key);
+    if (loaded) {
+      return loaded;
+    }
+  }
+
+  return null;
+}
+
+async function pruneSessionSnapshots(sessionId: string): Promise<void> {
+  const snapshots = await listSnapshots(sessionId);
+  if (snapshots.length <= SNAPSHOT_RETENTION) {
+    return;
+  }
+  const toDelete = snapshots.slice(SNAPSHOT_RETENTION);
+  for (const snapshot of toDelete) {
+    await deleteSnapshot(snapshot.key);
+  }
+}
+
+export async function saveSessionSnapshot(sessionId: string, payload: unknown): Promise<string> {
+  const lastSessionPayload =
+    payload && typeof payload === 'object'
+      ? {
+        ...(payload as Record<string, unknown>),
+        schemaVersion: SNAPSHOT_SCHEMA_VERSION
+      }
+      : payload;
+
+  await saveSnapshot(LAST_SESSION_KEY, lastSessionPayload);
+  const key = makeSessionSnapshotKey(sessionId);
+  await saveSnapshot(key, payload);
+  await pruneSessionSnapshots(sessionId);
+  return key;
 }
 
 export async function appendLogEntry(entry: Omit<LogEntry, 'seq' | 'timestamp'>): Promise<LogEntry> {
