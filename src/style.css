@@ -1622,7 +1622,7 @@ button.danger:hover {
   }
   
   .board-bleed {
-    padding: 0.45rem 0.35rem 0.7rem;
+    padding: 0 0 0.7rem;
     background: transparent;
   }
 
@@ -1636,16 +1636,19 @@ button.danger:hover {
     align-items: flex-start;
   }
   
-  .board {
+  .board-bleed .board {
     gap: 1px;
-    padding: 3px;
-    width: clamp(
-      calc(100vw - 0.7rem - var(--safe-area-left) - var(--safe-area-right)),
-      132vw,
-      620px
-    );
+    padding: 0;
+    width: 100vw;
     max-width: none;
-    flex: 0 0 auto;
+    flex: 0 0 100vw;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .board-bleed .board::before {
+    content: none;
   }
   
   .cell {
