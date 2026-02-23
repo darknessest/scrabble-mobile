@@ -446,46 +446,46 @@ input[type="checkbox"] {
 }
 
 /* Toast notifications */
+.events-box {
+  width: 100%;
+  max-width: 1200px;
+}
+
 .toast {
-  position: fixed;
-  top: calc(12px + var(--safe-area-top));
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-  z-index: 5000;
-  max-width: min(560px, calc(100vw - 2rem));
-  padding: 0.65rem 1rem;
-  border-radius: 999px;
-  background: rgba(74, 56, 39, 0.96);
-  border: 1px solid var(--border-strong);
+  width: 100%;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-primary) 86%, #000000 14%);
+  border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
   opacity: 0;
   transition:
     opacity 180ms ease-out,
     transform 180ms ease-out;
   pointer-events: none;
+  transform: translateY(-4px);
 }
 
 .toast.is-visible {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
   pointer-events: auto;
 }
 
 .toast.is-hiding {
   opacity: 0;
-  transform: translateX(-50%) translateY(-8px);
+  transform: translateY(-4px);
 }
 
 .toast.info {
-  background: rgba(74, 56, 39, 0.96);
+  background: color-mix(in srgb, var(--bg-primary) 86%, #000000 14%);
+  border-color: var(--border-subtle);
 }
 
 .toast.danger {
-  background: linear-gradient(145deg, #b2404a 0%, #7f2028 100%);
-  border-color: rgba(178, 64, 74, 0.6);
+  background: color-mix(in srgb, #7f2028 62%, var(--bg-primary));
+  border-color: rgba(178, 64, 74, 0.55);
 }
 
 /* =====================================================
@@ -905,6 +905,12 @@ button.danger:hover {
   margin-right: clamp(0.1rem, 2vw, 0.35rem);
 }
 
+.board-bleed .events-box {
+  width: 100%;
+  margin-left: clamp(0.1rem, 2vw, 0.35rem);
+  margin-right: clamp(0.1rem, 2vw, 0.35rem);
+}
+
 .board-bleed .board {
   box-shadow: var(--shadow-lg);
   border-width: 3px;
@@ -933,6 +939,11 @@ button.danger:hover {
   }
 
   .board-bleed .card-head {
+    margin-left: var(--page-gutter-tight);
+    margin-right: var(--page-gutter-tight);
+  }
+
+  .board-bleed .events-box {
     margin-left: var(--page-gutter-tight);
     margin-right: var(--page-gutter-tight);
   }
@@ -1775,6 +1786,13 @@ button.danger:hover {
     border: 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .board-bleed .events-box {
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+    padding: 0 var(--page-gutter-tight);
   }
 
   .board-bleed .board::before {

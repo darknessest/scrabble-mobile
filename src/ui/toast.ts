@@ -7,6 +7,10 @@ export class ToastManager {
         this.toastEl = toastEl;
     }
 
+    private getContainer(): HTMLElement | null {
+        return this.toastEl?.parentElement ?? null;
+    }
+
     private hideToast(): void {
         if (!this.toastEl) return;
         this.toastEl.classList.remove('is-visible');
@@ -15,11 +19,15 @@ export class ToastManager {
         this.toastOutTimer = window.setTimeout(() => {
             this.toastEl.style.display = 'none';
             this.toastEl.classList.remove('is-hiding');
+            const container = this.getContainer();
+            if (container) container.style.display = 'none';
         }, 220);
     }
 
     showToast(message: string, variant: 'info' | 'danger' = 'info', ms = 4500): void {
         if (!this.toastEl) return;
+        const container = this.getContainer();
+        if (container) container.style.display = '';
         this.toastEl.textContent = message;
         this.toastEl.className = `toast ${variant}`;
         this.toastEl.style.display = '';
