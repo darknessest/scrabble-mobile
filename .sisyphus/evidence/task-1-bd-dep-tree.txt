@@ -1,0 +1,5 @@
+
+🌲 Dependency tree for scrabble-ogv:
+
+scrabble-ogv: UI Redesign: Tournament Scrabble Skin [P1] (open) [READY]
+

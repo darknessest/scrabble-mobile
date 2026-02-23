@@ -1,0 +1,29 @@
+[task-12] Mon Feb 23 13:01:42 CST 2026
+--- npm run build ---
+
+> scrabble-wpa@1.0.0 build
+> tsc && vite build
+
+vite v7.2.7 building client environment for production...
+transforming...
+✓ 92 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/assets/endgameScan.worker-BrBU3X1M.js    8.60 kB
+dist/index.html                              13.71 kB │ gzip:  3.03 kB
+dist/assets/index-DsvLFvM0.css               26.79 kB │ gzip:  6.59 kB
+dist/assets/index-D1E-aKfE.js               258.63 kB │ gzip: 86.73 kB
+✓ built in 384ms
+--- preview check ---
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+HTTP/1.1 200 OK
+Vary: Origin
+Content-Type: text/html
+Cache-Control: no-cache
+Etag: W/"3591-aE0P1YX0TcfuSajdSXePzdwqiyI"
+Date: Mon, 23 Feb 2026 19:01:43 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+

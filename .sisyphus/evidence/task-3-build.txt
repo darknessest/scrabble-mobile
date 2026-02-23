@@ -1,0 +1,14 @@
+
+> scrabble-wpa@1.0.0 build
+> tsc && vite build
+
+vite v7.2.7 building client environment for production...
+transforming...
+✓ 92 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/assets/endgameScan.worker-BrBU3X1M.js    8.60 kB
+dist/index.html                              13.71 kB │ gzip:  3.03 kB
+dist/assets/index-D2iS2qiX.css               24.79 kB │ gzip:  6.01 kB
+dist/assets/index-BCeiqfWn.js               258.63 kB │ gzip: 86.73 kB
+✓ built in 368ms
