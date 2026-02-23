@@ -1229,6 +1229,10 @@ button.danger:hover {
   min-height: 3rem;
 }
 
+.rack + .row.wrap.gap {
+  margin-top: 0.85rem;
+}
+
 /* Tile Button */
 .tile {
   display: inline-flex;
@@ -1237,7 +1241,7 @@ button.danger:hover {
   justify-content: center;
   min-width: 2.75rem;
   min-height: 3.25rem;
-  padding: 0.4rem 0.5rem;
+  padding: 0.35rem 0.45rem;
   background: var(--tile-bg);
   border: 2px solid var(--tile-border);
   border-radius: var(--radius-md);
@@ -1285,7 +1289,7 @@ button.danger:hover {
 
 .tile .letter {
   font-family: var(--font-tile);
-  font-size: 1.25rem;
+  font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--tile-text);
@@ -1419,6 +1423,36 @@ button.danger:hover {
   color: var(--text-secondary);
   font-weight: 600;
   margin-bottom: 0.75rem;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.35rem;
+  border-radius: var(--radius-md);
+}
+
+.stats-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.stats-details summary::marker {
+  content: '';
+}
+
+.stats-details summary::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  transform: rotate(45deg);
+  transition: transform var(--transition-fast);
+  flex: 0 0 auto;
+}
+
+.stats-details[open] summary::after {
+  transform: rotate(-135deg);
 }
 
 .stats-row {
@@ -1676,6 +1710,25 @@ button.danger:hover {
     display: none;
   }
 
+  #dict-controls > .row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.35rem;
+    align-items: stretch;
+  }
+
+  #dict-controls button {
+    min-width: 0;
+    width: 100%;
+    justify-content: center;
+    padding: 0.45rem 0.35rem;
+    font-size: 0.75rem;
+  }
+
+  #dict-controls button span[aria-label] {
+    font-size: 0.85em;
+  }
+
   .board-card .card-head > h3,
   .rack-card .card-head > h3,
   .info-card .card-head > h3 {
@@ -1712,6 +1765,7 @@ button.danger:hover {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.5rem;
+    margin-top: 0.85rem;
   }
 
   .rack-card .row.wrap.gap button {
@@ -1739,11 +1793,11 @@ button.danger:hover {
   
   .tile {
     min-width: 2.5rem;
-    min-height: 3rem;
+    min-height: 3.15rem;
   }
   
   .tile .letter {
-    font-size: 1.1rem;
+    font-size: 1.25rem;
     margin-bottom: 0.45rem;
   }
   
